@@ -1,14 +1,17 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { uploadNote, listNotes, getNote } from '../services/notes.js'
+import { uploadNote, listNotes, getNote, getTranscript } from '../services/notes.js'
 import type { AudioStorageProvider } from '../storage/index.js'
+import type { TranscriptionProvider } from '../transcription/index.js'
+import { runTranscription } from '../transcription/worker.js'
 import { handleServiceError } from './jobs.js'
 
 interface NotesRouteOptions {
   storage: AudioStorageProvider
+  transcription: TranscriptionProvider
 }
 
 const notesRoutes: FastifyPluginAsync<NotesRouteOptions> = async (fastify, opts) => {
-  const { storage } = opts
+  const { storage, transcription } = opts
 
   fastify.post<{ Params: { jobId: string } }>(
     '/api/jobs/:jobId/notes',
@@ -59,6 +62,14 @@ const notesRoutes: FastifyPluginAsync<NotesRouteOptions> = async (fastify, opts)
           storage,
         )
 
+        if (!result.isDuplicate) {
+          setImmediate(() => {
+            runTranscription(result.noteId, transcription, storage).catch((err) => {
+              request.log.error({ err }, 'transcription worker error')
+            })
+          })
+        }
+
         const statusCode = result.isDuplicate ? 200 : 201
         return reply.code(statusCode).send({
           noteId: result.noteId,
@@ -90,6 +101,18 @@ const notesRoutes: FastifyPluginAsync<NotesRouteOptions> = async (fastify, opts)
       try {
         const note = await getNote(request.params.jobId, request.params.noteId, request.userId)
         return reply.send(note)
+      } catch (err: unknown) {
+        return handleServiceError(err, reply)
+      }
+    },
+  )
+
+  fastify.get<{ Params: { jobId: string; noteId: string } }>(
+    '/api/jobs/:jobId/notes/:noteId/transcript',
+    async (request, reply) => {
+      try {
+        const result = await getTranscript(request.params.jobId, request.params.noteId, request.userId)
+        return reply.send(result)
       } catch (err: unknown) {
         return handleServiceError(err, reply)
       }

@@ -8,6 +8,12 @@ export class FakeAudioStorage implements AudioStorageProvider {
     return { key, bucket: 'fake', sizeBytes: data.byteLength }
   }
 
+  async read(key: string): Promise<Buffer> {
+    const entry = this.stored.get(key)
+    if (!entry) throw new Error(`FakeAudioStorage: key not found: ${key}`)
+    return entry.data
+  }
+
   async delete(key: string): Promise<void> {
     this.stored.delete(key)
   }
