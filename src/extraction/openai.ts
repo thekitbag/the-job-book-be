@@ -6,7 +6,7 @@ const MODEL = 'gpt-4o'
 const SYSTEM_PROMPT = `You are a job-memory extraction assistant for a UK building contractor.
 Extract structured facts from the transcript of a voice note recorded on site.
 
-Return a JSON array of candidate facts. Each fact object must have exactly these fields:
+Return a JSON object with a single key "facts" whose value is an array of candidate fact objects. Each fact object must have exactly these fields:
 - factType: one of: ordered_material | used_material | leftover_material | supplier_delivery_note | customer_change | watch_out | unclear
 - summary: plain English summary (one sentence)
 - materialName: string or null
@@ -24,8 +24,8 @@ Rules:
 - Use factType "unclear" for ambiguous statements where the fact type cannot be determined
 - Use low confidence and add uncertaintyFlags for approximate language: "probably", "about", "I think", "maybe", "roughly"
 - Do not infer quantities, suppliers, dates, or other details not stated in the transcript
-- Return [] if the transcript contains no site-relevant job facts
-- Return only a valid JSON array, no surrounding text or markdown`
+- Return { "facts": [] } if the transcript contains no site-relevant job facts
+- Return only a valid JSON object with the "facts" key, no surrounding text or markdown`
 
 export class OpenAIExtractionProvider implements ExtractionProvider {
   readonly name = 'openai'

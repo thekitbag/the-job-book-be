@@ -18,7 +18,12 @@ vi.mock('../src/db/client.js', () => ({
     },
     candidateFact: {
       create: vi.fn().mockResolvedValue({}),
+      deleteMany: vi.fn().mockResolvedValue({}),
     },
+    $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<void>) => {
+      const { prisma } = await import('../src/db/client.js')
+      return fn(prisma)
+    }),
   },
 }))
 
@@ -55,6 +60,17 @@ describe('runExtraction — success path', () => {
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
     expect(vi.mocked(prisma.candidateFact.create as any)).toHaveBeenCalledTimes(FAKE_EXTRACTION_FACTS.length)
+  })
+
+  it('deletes prior facts for transcript before inserting new ones', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    expect(vi.mocked(prisma.candidateFact.deleteMany as any)).toHaveBeenCalledWith({
+      where: { sourceTranscriptId: TRANSCRIPT_ID },
+    })
   })
 
   it('persists ordered_material fact with correct fields', async () => {
@@ -201,6 +217,30 @@ describe('runExtraction — guard conditions', () => {
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
     expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
+  })
+
+  it('returns early when extractionStatus is already COMPLETED', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ extractionStatus: 'COMPLETED' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
+    expect(vi.mocked(prisma.transcript.update as any)).not.toHaveBeenCalled()
+  })
+
+  it('returns early when extractionStatus is EXTRACTING (in-flight)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ extractionStatus: 'EXTRACTING' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
+    expect(vi.mocked(prisma.transcript.update as any)).not.toHaveBeenCalled()
   })
 
   it('returns early when transcript text is null', async () => {

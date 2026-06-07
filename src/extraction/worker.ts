@@ -18,8 +18,9 @@ export async function runExtraction(
     include: { note: { include: { job: true } } },
   })
 
-  // Only extract from completed transcripts with text
+  // Only extract from completed transcripts with text; skip if already done or in-flight
   if (!transcript || transcript.status !== 'COMPLETED' || !transcript.text) return
+  if (transcript.extractionStatus === 'COMPLETED' || transcript.extractionStatus === 'EXTRACTING') return
 
   await prisma.transcript.update({
     where: { id: transcriptId },
@@ -45,41 +46,46 @@ export async function runExtraction(
       },
     })
 
-    for (const fact of result.facts) {
-      const isUnclear = fact.factType === 'unclear'
-      await prisma.candidateFact.create({
+    await prisma.$transaction(async (tx) => {
+      // Delete any facts from a prior partial run before re-creating them atomically
+      await tx.candidateFact.deleteMany({ where: { sourceTranscriptId: transcriptId } })
+
+      for (const fact of result.facts) {
+        const isUnclear = fact.factType === 'unclear'
+        await tx.candidateFact.create({
+          data: {
+            jobId: transcript.note.jobId,
+            sourceNoteId: transcript.noteId,
+            sourceTranscriptId: transcriptId,
+            factType: toDbFactType(fact.factType) as never,
+            status: isUnclear ? 'UNCLEAR' : 'DRAFT',
+            summary: fact.summary,
+            materialName: fact.materialName ?? null,
+            quantity: fact.quantity ?? null,
+            unit: fact.unit ?? null,
+            supplierName: fact.supplierName ?? null,
+            deliveryTiming: fact.deliveryTiming ?? null,
+            locationOrUse: fact.locationOrUse ?? null,
+            confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
+            confidenceReason: fact.confidenceReason,
+            uncertaintyFlags: fact.uncertaintyFlags,
+            extractionProvider: provider.name,
+            extractionModel: provider.model,
+            extractionSchemaVersion: result.schemaVersion,
+          },
+        })
+      }
+
+      await tx.transcript.update({
+        where: { id: transcriptId },
         data: {
-          jobId: transcript.note.jobId,
-          sourceNoteId: transcript.noteId,
-          sourceTranscriptId: transcriptId,
-          factType: toDbFactType(fact.factType) as never,
-          status: isUnclear ? 'UNCLEAR' : 'DRAFT',
-          summary: fact.summary,
-          materialName: fact.materialName ?? null,
-          quantity: fact.quantity ?? null,
-          unit: fact.unit ?? null,
-          supplierName: fact.supplierName ?? null,
-          deliveryTiming: fact.deliveryTiming ?? null,
-          locationOrUse: fact.locationOrUse ?? null,
-          confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
-          confidenceReason: fact.confidenceReason,
-          uncertaintyFlags: fact.uncertaintyFlags,
+          extractionStatus: 'COMPLETED',
           extractionProvider: provider.name,
           extractionModel: provider.model,
           extractionSchemaVersion: result.schemaVersion,
+          extractionCompletedAt: new Date(),
         },
       })
-    }
-
-    await prisma.transcript.update({
-      where: { id: transcriptId },
-      data: {
-        extractionStatus: 'COMPLETED',
-        extractionProvider: provider.name,
-        extractionModel: provider.model,
-        extractionSchemaVersion: result.schemaVersion,
-        extractionCompletedAt: new Date(),
-      },
     })
 
     await prisma.rawNote.update({
