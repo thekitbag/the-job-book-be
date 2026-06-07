@@ -8,11 +8,15 @@ import { createStorageProvider } from './storage/index.js'
 import type { AudioStorageProvider } from './storage/index.js'
 import { createTranscriptionProvider } from './transcription/index.js'
 import type { TranscriptionProvider } from './transcription/index.js'
+import { createExtractionProvider } from './extraction/index.js'
+import type { ExtractionProvider } from './extraction/index.js'
+import factsRoutes from './routes/facts.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
 
 export interface AppOptions {
   storage?: AudioStorageProvider
   transcription?: TranscriptionProvider
+  extraction?: ExtractionProvider
   maxAudioBytes?: number
 }
 
@@ -25,6 +29,7 @@ export function buildApp(opts: AppOptions = {}) {
 
   const storage = opts.storage ?? createStorageProvider()
   const transcription = opts.transcription ?? createTranscriptionProvider()
+  const extraction = opts.extraction ?? createExtractionProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
 
   const rawOrigins = process.env.CORS_ORIGIN ?? 'https://localhost:5173'
@@ -46,7 +51,8 @@ export function buildApp(opts: AppOptions = {}) {
 
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)
-  fastify.register(notesRoutes, { storage, transcription })
+  fastify.register(notesRoutes, { storage, transcription, extraction })
+  fastify.register(factsRoutes)
 
   // @fastify/multipart v9 calls req.raw.destroy(err) when the file size limit is exceeded,
   // which bypasses route try/catch and lands here. Remap to our stable error code.

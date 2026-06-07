@@ -119,7 +119,16 @@ export async function uploadNote(
   return { noteId, clientNoteId, status: 'UPLOADED', isDuplicate: false }
 }
 
-type TranscriptRow = { status: string; text?: string | null; language?: string | null; provider?: string | null; model?: string | null; errorCode?: string | null; completedAt?: Date | null }
+type TranscriptRow = {
+  status: string
+  text?: string | null
+  language?: string | null
+  provider?: string | null
+  model?: string | null
+  errorCode?: string | null
+  completedAt?: Date | null
+  extractionStatus?: string | null
+}
 
 function mapTranscriptStatus(t: TranscriptRow | undefined): 'waiting' | 'transcribing' | 'ready' | 'failed' {
   if (!t) return 'waiting'
@@ -129,9 +138,17 @@ function mapTranscriptStatus(t: TranscriptRow | undefined): 'waiting' | 'transcr
   return 'waiting'
 }
 
+function mapExtractionStatus(t: TranscriptRow | undefined): 'waiting' | 'extracting' | 'ready' | 'failed' {
+  if (!t || !t.extractionStatus) return 'waiting'
+  if (t.extractionStatus === 'EXTRACTING') return 'extracting'
+  if (t.extractionStatus === 'COMPLETED') return 'ready'
+  if (t.extractionStatus === 'FAILED') return 'failed'
+  return 'waiting'
+}
+
 // Inline summary used on list/detail responses — status only, no text
 function transcriptSummary(t: TranscriptRow | undefined) {
-  return { status: mapTranscriptStatus(t) }
+  return { status: mapTranscriptStatus(t), extractionStatus: mapExtractionStatus(t) }
 }
 
 export async function listNotes(jobId: string, userId: string) {
@@ -224,6 +241,7 @@ export async function getTranscript(jobId: string, noteId: string, userId: strin
     provider: t.provider ?? null,
     model: t.model ?? null,
     completedAt: t.completedAt ?? null,
+    extractionStatus: mapExtractionStatus(t),
   }
 }
 

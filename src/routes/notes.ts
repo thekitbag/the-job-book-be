@@ -3,15 +3,17 @@ import { uploadNote, listNotes, getNote, getTranscript } from '../services/notes
 import type { AudioStorageProvider } from '../storage/index.js'
 import type { TranscriptionProvider } from '../transcription/index.js'
 import { runTranscription } from '../transcription/worker.js'
+import type { ExtractionProvider } from '../extraction/index.js'
 import { handleServiceError } from './jobs.js'
 
 interface NotesRouteOptions {
   storage: AudioStorageProvider
   transcription: TranscriptionProvider
+  extraction: ExtractionProvider
 }
 
 const notesRoutes: FastifyPluginAsync<NotesRouteOptions> = async (fastify, opts) => {
-  const { storage, transcription } = opts
+  const { storage, transcription, extraction } = opts
 
   fastify.post<{ Params: { jobId: string } }>(
     '/api/jobs/:jobId/notes',
@@ -64,7 +66,7 @@ const notesRoutes: FastifyPluginAsync<NotesRouteOptions> = async (fastify, opts)
 
         if (!result.isDuplicate) {
           setImmediate(() => {
-            runTranscription(result.noteId, transcription, storage).catch((err) => {
+            runTranscription(result.noteId, transcription, storage, extraction).catch((err) => {
               request.log.error({ err }, 'transcription worker error')
             })
           })

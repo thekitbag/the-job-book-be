@@ -37,8 +37,9 @@ model Job {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  owner    User      @relation(fields: [ownerUserId], references: [id])
-  rawNotes RawNote[]
+  owner          User            @relation(fields: [ownerUserId], references: [id])
+  rawNotes       RawNote[]
+  candidateFacts CandidateFact[]
 
   @@map("jobs")
 }
@@ -62,9 +63,10 @@ model RawNote {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  job         Job          @relation(fields: [jobId], references: [id])
-  audioObject AudioObject?
-  transcripts Transcript[]
+  job            Job             @relation(fields: [jobId], references: [id])
+  audioObject    AudioObject?
+  transcripts    Transcript[]
+  candidateFacts CandidateFact[]
 
   @@unique([jobId, clientNoteId])
   @@map("raw_notes")
@@ -116,7 +118,17 @@ model Transcript {
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
-  note RawNote @relation(fields: [noteId], references: [id])
+  extractionStatus        ExtractionStatus?
+  extractionProvider      String?
+  extractionModel         String?
+  extractionSchemaVersion String?
+  extractionErrorCode     String?
+  extractionErrorMessage  String?
+  extractionStartedAt     DateTime?
+  extractionCompletedAt   DateTime?
+
+  note           RawNote         @relation(fields: [noteId], references: [id])
+  candidateFacts CandidateFact[]
 
   @@map("transcripts")
 }
@@ -126,6 +138,68 @@ enum TranscriptStatus {
   TRANSCRIBING
   COMPLETED
   FAILED
+}
+
+enum ExtractionStatus {
+  PENDING
+  EXTRACTING
+  COMPLETED
+  FAILED
+}
+
+enum FactType {
+  ORDERED_MATERIAL
+  USED_MATERIAL
+  LEFTOVER_MATERIAL
+  SUPPLIER_DELIVERY_NOTE
+  CUSTOMER_CHANGE
+  WATCH_OUT
+  UNCLEAR
+}
+
+enum CandidateFactStatus {
+  DRAFT
+  UNCLEAR
+  CONFIRMED
+  CORRECTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum ConfidenceLabel {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+model CandidateFact {
+  id                      String              @id @default(uuid())
+  jobId                   String
+  sourceNoteId            String
+  sourceTranscriptId      String
+  factType                FactType
+  status                  CandidateFactStatus @default(DRAFT)
+  summary                 String
+  materialName            String?
+  quantity                String?
+  unit                    String?
+  supplierName            String?
+  deliveryTiming          String?
+  locationOrUse           String?
+  confidenceLabel         ConfidenceLabel
+  confidenceReason        String
+  uncertaintyFlags        String[]
+  extractionProvider      String?
+  extractionModel         String?
+  extractionSchemaVersion String?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  job        Job        @relation(fields: [jobId], references: [id])
+  sourceNote RawNote    @relation(fields: [sourceNoteId], references: [id])
+  transcript Transcript @relation(fields: [sourceTranscriptId], references: [id])
+
+  @@map("candidate_facts")
 }
 
 // Placeholder for future review decisions

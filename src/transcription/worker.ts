@@ -1,11 +1,14 @@
 import { prisma } from '../db/client.js'
 import type { AudioStorageProvider } from '../storage/index.js'
+import { runExtraction } from '../extraction/worker.js'
+import type { ExtractionProvider } from '../extraction/index.js'
 import type { TranscriptionProvider } from './types.js'
 
 export async function runTranscription(
   noteId: string,
   provider: TranscriptionProvider,
   storage: AudioStorageProvider,
+  extractionProvider?: ExtractionProvider,
 ): Promise<void> {
   const note = await prisma.rawNote.findUnique({
     where: { id: noteId },
@@ -28,6 +31,8 @@ export async function runTranscription(
     where: { id: noteId },
     data: { serverStatus: 'TRANSCRIBING' },
   })
+
+  let transcriptionTranscriptId: string | undefined
 
   try {
     const audioBuffer = await storage.read(note.audioObject.storageKey)
@@ -55,6 +60,8 @@ export async function runTranscription(
       where: { id: noteId },
       data: { serverStatus: 'TRANSCRIBED' },
     })
+
+    transcriptionTranscriptId = transcript.id
   } catch (err: unknown) {
     const errorCode = (err as { code?: string })?.code ?? 'UNKNOWN'
     const errorMessage = (err as { message?: string })?.message ?? String(err)
@@ -69,5 +76,9 @@ export async function runTranscription(
       where: { id: noteId },
       data: { serverStatus: 'FAILED' },
     }).catch(() => {})
+  }
+
+  if (transcriptionTranscriptId && extractionProvider) {
+    await runExtraction(transcriptionTranscriptId, extractionProvider)
   }
 }
