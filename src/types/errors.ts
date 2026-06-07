@@ -1,0 +1,16 @@
+export const ErrorCode = {
+  AUDIO_UNSUPPORTED_TYPE: 'AUDIO_UNSUPPORTED_TYPE',
+  AUDIO_TOO_LARGE: 'AUDIO_TOO_LARGE',
+  NOTE_DUPLICATE_CLIENT_ID: 'NOTE_DUPLICATE_CLIENT_ID',
+  JOB_NOT_FOUND: 'JOB_NOT_FOUND',
+  NOTE_NOT_FOUND: 'NOTE_NOT_FOUND',
+  FORBIDDEN: 'FORBIDDEN',
+  MISSING_FIELD: 'MISSING_FIELD',
+} as const
+
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
+
+export interface ApiError {
+  code: ErrorCode
+  message: string
+}

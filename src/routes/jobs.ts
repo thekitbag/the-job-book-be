@@ -1,0 +1,51 @@
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
+import { getCurrentJob, listJobs, getJob } from '../services/jobs.js'
+import { ErrorCode } from '../types/errors.js'
+
+const jobsRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.get('/api/jobs/current', async (request, reply) => {
+    try {
+      const job = await getCurrentJob(request.userId)
+      return reply.send(job)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  fastify.get('/api/jobs', async (request, reply) => {
+    const jobs = await listJobs(request.userId)
+    return reply.send(jobs)
+  })
+
+  fastify.get<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
+    try {
+      const job = await getJob(request.params.jobId, request.userId)
+      return reply.send(job)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+}
+
+const STATUS_MAP: Record<string, number> = {
+  [ErrorCode.JOB_NOT_FOUND]: 404,
+  [ErrorCode.NOTE_NOT_FOUND]: 404,
+  [ErrorCode.FORBIDDEN]: 403,
+  [ErrorCode.AUDIO_UNSUPPORTED_TYPE]: 415,
+  [ErrorCode.AUDIO_TOO_LARGE]: 413,
+  [ErrorCode.NOTE_DUPLICATE_CLIENT_ID]: 409,
+  [ErrorCode.MISSING_FIELD]: 400,
+}
+
+export function handleServiceError(err: unknown, reply: FastifyReply) {
+  if (isApiError(err)) {
+    return reply.code(STATUS_MAP[err.code] ?? 400).send(err)
+  }
+  throw err
+}
+
+export function isApiError(err: unknown): err is { code: string; message: string } {
+  return typeof err === 'object' && err !== null && 'code' in err && 'message' in err
+}
+
+export default jobsRoutes
