@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  role      UserRole @default(PILOT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs     Job[]
+  decisions ReviewDecision[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  PILOT
+  INTERNAL
+}
+
+model Job {
+  id                   String    @id @default(uuid())
+  ownerUserId          String
+  title                String
+  jobType              String
+  status               JobStatus @default(ACTIVE)
+  roughLocationOrLabel String?
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  owner    User      @relation(fields: [ownerUserId], references: [id])
+  rawNotes RawNote[]
+
+  @@map("jobs")
+}
+
+enum JobStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model RawNote {
+  id           String         @id @default(uuid())
+  jobId        String
+  clientNoteId String
+  capturedAt   DateTime
+  uploadedAt   DateTime       @default(now())
+  mimeType     String
+  durationMs   Int?
+  sizeBytes    Int
+  serverStatus NoteStatus     @default(UPLOADED)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  job         Job          @relation(fields: [jobId], references: [id])
+  audioObject AudioObject?
+
+  @@unique([jobId, clientNoteId])
+  @@map("raw_notes")
+}
+
+enum NoteStatus {
+  UPLOADED
+  QUEUED
+  TRANSCRIBING
+  TRANSCRIBED
+  EXTRACTING
+  EXTRACTED
+  RECONCILING
+  DONE
+  FAILED
+}
+
+model AudioObject {
+  id         String   @id @default(uuid())
+  noteId     String   @unique
+  storageKey String   @unique
+  bucket     String
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+
+  note RawNote @relation(fields: [noteId], references: [id])
+
+  @@map("audio_objects")
+}
+
+// Placeholder tables for future phases - schema only, no business logic yet
+model Transcript {
+  id                 String           @id @default(uuid())
+  noteId             String
+  revision           Int              @default(1)
+  text               String?
+  provider           String?
+  model              String?
+  providerResponseId String?
+  language           String?
+  confidence         Float?
+  status             TranscriptStatus @default(PENDING)
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime         @default(now())
+
+  @@map("transcripts")
+}
+
+enum TranscriptStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// Placeholder for future review decisions
+model ReviewDecision {
+  id          String   @id @default(uuid())
+  confirmedBy String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [confirmedBy], references: [id])
+
+  @@map("review_decisions")
+}
