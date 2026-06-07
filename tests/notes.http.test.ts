@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { FakeAudioStorage } from './fakes/storage.js'
+import { FakeTranscriptionProvider } from '../src/transcription/fake.js'
 
 // Tiny limit so oversized tests only need a small buffer
 const TEST_MAX_BYTES = 100
@@ -17,8 +18,14 @@ vi.mock('../src/db/client.js', () => ({
       findUnique: vi.fn(),
       findFirst: vi.fn(),
       findMany: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
     },
     audioObject: { create: vi.fn() },
+    transcript: {
+      create: vi.fn().mockResolvedValue({ id: 'tx-1' }),
+      update: vi.fn().mockResolvedValue({}),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
     $transaction: vi.fn(),
   },
 }))
@@ -67,7 +74,7 @@ function mockPrisma(): any {
 
 beforeAll(async () => {
   storage = new FakeAudioStorage()
-  app = buildApp({ storage, maxAudioBytes: TEST_MAX_BYTES })
+  app = buildApp({ storage, transcription: new FakeTranscriptionProvider(), maxAudioBytes: TEST_MAX_BYTES })
   await app.ready()
 })
 
@@ -253,7 +260,7 @@ describe('CORS', () => {
     const original = process.env.CORS_ORIGIN
     process.env.CORS_ORIGIN = 'https://localhost:5173,https://192.168.1.10:5173'
     // Build a fresh app so it picks up the new env value
-    const app2 = buildApp({ storage, maxAudioBytes: TEST_MAX_BYTES })
+    const app2 = buildApp({ storage, transcription: new FakeTranscriptionProvider(), maxAudioBytes: TEST_MAX_BYTES })
     await app2.ready()
 
     const response = await app2.inject({
@@ -280,5 +287,153 @@ describe('CORS', () => {
     })
 
     expect(response.headers['access-control-allow-origin']).toBeUndefined()
+  })
+})
+
+describe('GET /api/jobs/:jobId/notes — transcript status in list', () => {
+  it('returns transcript status "waiting" when no transcript exists', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findMany as any).mockResolvedValueOnce([
+      {
+        id: 'note-1', clientNoteId: 'c1', capturedAt: new Date(), uploadedAt: new Date(),
+        mimeType: 'audio/webm', durationMs: null, sizeBytes: 100, serverStatus: 'UPLOADED',
+        transcripts: [],
+      },
+    ])
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()[0].transcript).toEqual({ status: 'waiting' })
+  })
+
+  it('returns transcript status "ready" when transcript is COMPLETED', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findMany as any).mockResolvedValueOnce([
+      {
+        id: 'note-2', clientNoteId: 'c2', capturedAt: new Date(), uploadedAt: new Date(),
+        mimeType: 'audio/webm', durationMs: 4000, sizeBytes: 200, serverStatus: 'TRANSCRIBED',
+        transcripts: [{ status: 'COMPLETED', text: 'Ordered 12 sheets.', createdAt: new Date() }],
+      },
+    ])
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    // List response contains status only — no text
+    expect(response.json()[0].transcript).toEqual({ status: 'ready' })
+  })
+
+  it('returns transcript status "failed" when transcript has FAILED', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findMany as any).mockResolvedValueOnce([
+      {
+        id: 'note-3', clientNoteId: 'c3', capturedAt: new Date(), uploadedAt: new Date(),
+        mimeType: 'audio/webm', durationMs: null, sizeBytes: 150, serverStatus: 'FAILED',
+        transcripts: [{ status: 'FAILED', text: null, createdAt: new Date() }],
+      },
+    ])
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()[0].transcript).toEqual({ status: 'failed' })
+  })
+})
+
+describe('GET /api/jobs/:jobId/notes/:noteId — transcript status in detail', () => {
+  it('returns transcript status (no text) for a ready note', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findFirst as any).mockResolvedValueOnce({
+      id: 'note-detail-1', clientNoteId: 'cd1', capturedAt: new Date(), uploadedAt: new Date(),
+      mimeType: 'audio/webm', durationMs: 5000, sizeBytes: 300, serverStatus: 'TRANSCRIBED',
+      transcripts: [{ status: 'COMPLETED', text: 'Used six OSB boards on the back wall.', createdAt: new Date() }],
+    })
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes/note-detail-1`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    // Detail response also contains status only — text is fetched via /transcript endpoint
+    expect(response.json().transcript).toEqual({ status: 'ready' })
+  })
+})
+
+describe('GET /api/jobs/:jobId/notes/:noteId/transcript', () => {
+  it('returns waiting when no transcript exists', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findFirst as any).mockResolvedValueOnce({
+      id: 'note-tx-1', clientNoteId: 'ctx1', capturedAt: new Date(), uploadedAt: new Date(),
+      mimeType: 'audio/webm', durationMs: null, sizeBytes: 100, serverStatus: 'UPLOADED',
+      transcripts: [],
+    })
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes/note-tx-1/transcript`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ noteId: 'note-tx-1', status: 'waiting' })
+  })
+
+  it('returns ready with full transcript text', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findFirst as any).mockResolvedValueOnce({
+      id: 'note-tx-2', clientNoteId: 'ctx2', capturedAt: new Date(), uploadedAt: new Date(),
+      mimeType: 'audio/webm', durationMs: 4000, sizeBytes: 200, serverStatus: 'TRANSCRIBED',
+      transcripts: [{
+        status: 'COMPLETED', text: 'Ordered 12 sheets of plasterboard from Jewson.',
+        language: 'en', provider: 'openai', model: 'whisper-1',
+        errorCode: null, completedAt: new Date(), createdAt: new Date(),
+      }],
+    })
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes/note-tx-2/transcript`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const json = response.json()
+    expect(json).toMatchObject({
+      noteId: 'note-tx-2',
+      status: 'ready',
+      text: 'Ordered 12 sheets of plasterboard from Jewson.',
+      language: 'en',
+      provider: 'openai',
+      model: 'whisper-1',
+    })
+  })
+
+  it('returns failed status with errorCode', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    vi.mocked(prisma.rawNote.findFirst as any).mockResolvedValueOnce({
+      id: 'note-tx-3', clientNoteId: 'ctx3', capturedAt: new Date(), uploadedAt: new Date(),
+      mimeType: 'audio/webm', durationMs: null, sizeBytes: 150, serverStatus: 'FAILED',
+      transcripts: [{
+        status: 'FAILED', text: null, language: null, provider: 'openai', model: 'whisper-1',
+        errorCode: 'PROVIDER_ERROR', completedAt: new Date(), createdAt: new Date(),
+      }],
+    })
+
+    const response = await app.inject({
+      method: 'GET', url: `/api/jobs/${JOB_ID}/notes/note-tx-3/transcript`, headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ noteId: 'note-tx-3', status: 'failed', errorCode: 'PROVIDER_ERROR' })
   })
 })

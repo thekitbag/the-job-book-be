@@ -64,6 +64,7 @@ model RawNote {
 
   job         Job          @relation(fields: [jobId], references: [id])
   audioObject AudioObject?
+  transcripts Transcript[]
 
   @@unique([jobId, clientNoteId])
   @@map("raw_notes")
@@ -95,27 +96,34 @@ model AudioObject {
   @@map("audio_objects")
 }
 
-// Placeholder tables for future phases - schema only, no business logic yet
 model Transcript {
-  id                 String           @id @default(uuid())
-  noteId             String
-  revision           Int              @default(1)
-  text               String?
-  provider           String?
-  model              String?
-  providerResponseId String?
-  language           String?
-  confidence         Float?
-  status             TranscriptStatus @default(PENDING)
-  errorCode          String?
-  errorMessage       String?
-  createdAt          DateTime         @default(now())
+  id                   String           @id @default(uuid())
+  noteId               String
+  revision             Int              @default(1)
+  status               TranscriptStatus @default(PENDING)
+  text                 String?
+  language             String?
+  confidence           Float?
+  provider             String?
+  model                String?
+  requestSchemaVersion String?
+  providerResponseId   String?
+  retryCount           Int              @default(0)
+  errorCode            String?
+  errorMessage         String?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  note RawNote @relation(fields: [noteId], references: [id])
 
   @@map("transcripts")
 }
 
 enum TranscriptStatus {
   PENDING
+  TRANSCRIBING
   COMPLETED
   FAILED
 }
