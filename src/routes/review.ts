@@ -22,9 +22,36 @@ const reviewRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       try {
         const payload = request.body
-        if (!payload?.action) {
-          return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'action is required' })
+        const missing = (field: string) =>
+          reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: `${field} is required` })
+
+        if (!payload?.action) return missing('action')
+
+        switch (payload.action) {
+          case 'confirm':
+            if (!payload.candidateFactId) return missing('candidateFactId')
+            break
+          case 'correct':
+            if (!payload.candidateFactId) return missing('candidateFactId')
+            if (!payload.corrected?.summary) return missing('corrected.summary')
+            break
+          case 'reject':
+            if (!payload.candidateFactId) return missing('candidateFactId')
+            break
+          case 'confirm_section':
+            if (!payload.sectionKey) return missing('sectionKey')
+            if (!Array.isArray(payload.candidateFactIds) || payload.candidateFactIds.length === 0)
+              return missing('candidateFactIds')
+            break
+          case 'add_missing':
+            if (!payload.memoryType) return missing('memoryType')
+            if (!payload.memory) return missing('memory')
+            if (!payload.memory.summary) return missing('memory.summary')
+            break
+          default:
+            return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'unknown action' })
         }
+
         const result = await submitReviewDecision(request.params.jobId, request.userId, payload)
         return reply.code(201).send(result)
       } catch (err: unknown) {

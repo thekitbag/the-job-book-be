@@ -859,3 +859,94 @@ describe('POST /api/jobs/:jobId/review-decisions — access control', () => {
     expect(response.json()).toMatchObject({ code: 'CANDIDATE_FACT_NOT_FOUND' })
   })
 })
+
+// ─── Input validation ─────────────────────────────────────────────────────────
+
+function post400(body: object) {
+  return app.inject({
+    method: 'POST',
+    url: `/api/jobs/${JOB_ID}/review-decisions`,
+    headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+    payload: body,
+  })
+}
+
+describe('POST /api/jobs/:jobId/review-decisions — input validation', () => {
+  it('returns 400 when action is missing', async () => {
+    const res = await post400({})
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD' })
+  })
+
+  it('returns 400 for unknown action', async () => {
+    const res = await post400({ action: 'do_something_weird' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD' })
+  })
+
+  it('confirm: returns 400 when candidateFactId is missing', async () => {
+    const res = await post400({ action: 'confirm' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('candidateFactId') })
+  })
+
+  it('correct: returns 400 when candidateFactId is missing', async () => {
+    const res = await post400({ action: 'correct', corrected: { summary: 'ok' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('candidateFactId') })
+  })
+
+  it('correct: returns 400 when corrected is missing', async () => {
+    const res = await post400({ action: 'correct', candidateFactId: FACT_ID })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('corrected.summary') })
+  })
+
+  it('correct: returns 400 when corrected.summary is missing', async () => {
+    const res = await post400({ action: 'correct', candidateFactId: FACT_ID, corrected: { locationOrUse: 'ceiling' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('corrected.summary') })
+  })
+
+  it('reject: returns 400 when candidateFactId is missing', async () => {
+    const res = await post400({ action: 'reject' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('candidateFactId') })
+  })
+
+  it('confirm_section: returns 400 when sectionKey is missing', async () => {
+    const res = await post400({ action: 'confirm_section', candidateFactIds: [FACT_ID] })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('sectionKey') })
+  })
+
+  it('confirm_section: returns 400 when candidateFactIds is missing', async () => {
+    const res = await post400({ action: 'confirm_section', sectionKey: 'ordered_materials' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('candidateFactIds') })
+  })
+
+  it('confirm_section: returns 400 when candidateFactIds is an empty array', async () => {
+    const res = await post400({ action: 'confirm_section', sectionKey: 'ordered_materials', candidateFactIds: [] })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('candidateFactIds') })
+  })
+
+  it('add_missing: returns 400 when memoryType is missing', async () => {
+    const res = await post400({ action: 'add_missing', memory: { summary: 'ok' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('memoryType') })
+  })
+
+  it('add_missing: returns 400 when memory is missing', async () => {
+    const res = await post400({ action: 'add_missing', memoryType: 'used_material' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('memory') })
+  })
+
+  it('add_missing: returns 400 when memory.summary is missing', async () => {
+    const res = await post400({ action: 'add_missing', memoryType: 'used_material', memory: { materialName: 'OSB' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD', message: expect.stringContaining('memory.summary') })
+  })
+})
