@@ -119,10 +119,14 @@ Product owns the story order. Tech decomposition lives at:
 Backend briefs should normally be handled in this order:
 
 1. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-stories-2-4-capture-foundation-brief.md`
-2. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-stories-5-8-memory-pipeline-brief.md`
-3. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-story-9-pilot-inspection-brief.md`
+2. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-story-5-transcription-brief.md`
+3. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-story-6-draft-facts-brief.md`
+4. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-story-7-review-confirm-memory-brief.md`
+5. `/Users/markgray/projects/the-job-book/the-job-book-project/tech/06-agent-briefs/backend-story-9-pilot-inspection-brief.md`
 
 Story 1 is frontend-led. Backend should only support it if the frontend agent needs a tiny upload/inspection endpoint and the tech lead agrees.
+
+Do not use superseded bundled briefs unless the tech lead explicitly reactivates them. Do not jump ahead to reconciliation, recommendations, admin dashboards, or procurement before the current narrow story is complete or the tech lead explicitly accepts the risk.
 
 ## Implementation Standards
 
@@ -175,3 +179,19 @@ When you finish a task, report:
 - API contract changes or assumptions
 - provider configuration and fake/real provider status
 - any product-risk issue that should go back to tech/product
+
+When the active tech-lead brief has a `Handoff Back` section, answer every item in that section. A story is not ready for review with only a status line such as "tests pass" or "ready for PR".
+
+Your handoff must include, at minimum:
+
+- branch name
+- commit/push status
+- what changed
+- how to run it locally
+- exact test/build commands run and results
+- API contract assumptions or mismatches
+- manual checks performed, or explicitly state not performed
+- anything deliberately left out of scope
+- any risks or follow-up needed
+
+If the brief asks for an example payload, provider configuration, migration notes, or failure/retry behaviour, include it explicitly.
