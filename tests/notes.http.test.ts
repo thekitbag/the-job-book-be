@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { FakeAudioStorage } from './fakes/storage.js'
 import { FakeTranscriptionProvider } from '../src/transcription/fake.js'
+import { FakeExtractionProvider } from '../src/extraction/fake.js'
 
 // Tiny limit so oversized tests only need a small buffer
 const TEST_MAX_BYTES = 100
@@ -25,6 +26,11 @@ vi.mock('../src/db/client.js', () => ({
       create: vi.fn().mockResolvedValue({ id: 'tx-1' }),
       update: vi.fn().mockResolvedValue({}),
       findFirst: vi.fn().mockResolvedValue(null),
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
+    candidateFact: {
+      create: vi.fn().mockResolvedValue({}),
+      findMany: vi.fn().mockResolvedValue([]),
     },
     $transaction: vi.fn(),
   },
@@ -74,7 +80,7 @@ function mockPrisma(): any {
 
 beforeAll(async () => {
   storage = new FakeAudioStorage()
-  app = buildApp({ storage, transcription: new FakeTranscriptionProvider(), maxAudioBytes: TEST_MAX_BYTES })
+  app = buildApp({ storage, transcription: new FakeTranscriptionProvider(), extraction: new FakeExtractionProvider(), maxAudioBytes: TEST_MAX_BYTES })
   await app.ready()
 })
 
@@ -260,7 +266,7 @@ describe('CORS', () => {
     const original = process.env.CORS_ORIGIN
     process.env.CORS_ORIGIN = 'https://localhost:5173,https://192.168.1.10:5173'
     // Build a fresh app so it picks up the new env value
-    const app2 = buildApp({ storage, transcription: new FakeTranscriptionProvider(), maxAudioBytes: TEST_MAX_BYTES })
+    const app2 = buildApp({ storage, transcription: new FakeTranscriptionProvider(), extraction: new FakeExtractionProvider(), maxAudioBytes: TEST_MAX_BYTES })
     await app2.ready()
 
     const response = await app2.inject({
@@ -307,7 +313,7 @@ describe('GET /api/jobs/:jobId/notes — transcript status in list', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()[0].transcript).toEqual({ status: 'waiting' })
+    expect(response.json()[0].transcript).toEqual({ status: 'waiting', extractionStatus: 'waiting' })
   })
 
   it('returns transcript status "ready" when transcript is COMPLETED', async () => {
@@ -327,7 +333,7 @@ describe('GET /api/jobs/:jobId/notes — transcript status in list', () => {
 
     expect(response.statusCode).toBe(200)
     // List response contains status only — no text
-    expect(response.json()[0].transcript).toEqual({ status: 'ready' })
+    expect(response.json()[0].transcript).toEqual({ status: 'ready', extractionStatus: 'waiting' })
   })
 
   it('returns transcript status "failed" when transcript has FAILED', async () => {
@@ -346,7 +352,7 @@ describe('GET /api/jobs/:jobId/notes — transcript status in list', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()[0].transcript).toEqual({ status: 'failed' })
+    expect(response.json()[0].transcript).toEqual({ status: 'failed', extractionStatus: 'waiting' })
   })
 })
 
@@ -366,7 +372,7 @@ describe('GET /api/jobs/:jobId/notes/:noteId — transcript status in detail', (
 
     expect(response.statusCode).toBe(200)
     // Detail response also contains status only — text is fetched via /transcript endpoint
-    expect(response.json().transcript).toEqual({ status: 'ready' })
+    expect(response.json().transcript).toEqual({ status: 'ready', extractionStatus: 'waiting' })
   })
 })
 
