@@ -30,10 +30,12 @@ const jobsRoutes: FastifyPluginAsync = async (fastify) => {
 const STATUS_MAP: Record<string, number> = {
   [ErrorCode.JOB_NOT_FOUND]: 404,
   [ErrorCode.NOTE_NOT_FOUND]: 404,
+  [ErrorCode.CANDIDATE_FACT_NOT_FOUND]: 404,
   [ErrorCode.FORBIDDEN]: 403,
   [ErrorCode.AUDIO_UNSUPPORTED_TYPE]: 415,
   [ErrorCode.AUDIO_TOO_LARGE]: 413,
   [ErrorCode.NOTE_DUPLICATE_CLIENT_ID]: 409,
+  [ErrorCode.ALREADY_REVIEWED]: 409,
   [ErrorCode.MISSING_FIELD]: 400,
 }
 
