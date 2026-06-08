@@ -15,8 +15,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  jobs     Job[]
-  decisions ReviewDecision[]
+  jobs            Job[]
+  reviewDecisions ReviewDecision[]
 
   @@map("users")
 }
@@ -37,9 +37,11 @@ model Job {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  owner          User            @relation(fields: [ownerUserId], references: [id])
-  rawNotes       RawNote[]
-  candidateFacts CandidateFact[]
+  owner           User             @relation(fields: [ownerUserId], references: [id])
+  rawNotes        RawNote[]
+  candidateFacts  CandidateFact[]
+  reviewDecisions ReviewDecision[]
+  memoryItems     MemoryItem[]
 
   @@map("jobs")
 }
@@ -195,20 +197,61 @@ model CandidateFact {
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
 
-  job        Job        @relation(fields: [jobId], references: [id])
-  sourceNote RawNote    @relation(fields: [sourceNoteId], references: [id])
-  transcript Transcript @relation(fields: [sourceTranscriptId], references: [id])
+  job             Job              @relation(fields: [jobId], references: [id])
+  sourceNote      RawNote          @relation(fields: [sourceNoteId], references: [id])
+  transcript      Transcript       @relation(fields: [sourceTranscriptId], references: [id])
+  reviewDecisions ReviewDecision[]
+  memoryItems     MemoryItem[]
 
   @@map("candidate_facts")
 }
 
-// Placeholder for future review decisions
-model ReviewDecision {
-  id          String   @id @default(uuid())
-  confirmedBy String
-  createdAt   DateTime @default(now())
+enum ReviewDecisionAction {
+  CONFIRM
+  CORRECT
+  REJECT
+  CONFIRM_SECTION
+  ADD_MISSING
+}
 
-  user User @relation(fields: [confirmedBy], references: [id])
+model ReviewDecision {
+  id              String               @id @default(uuid())
+  jobId           String
+  decidedBy       String
+  action          ReviewDecisionAction
+  candidateFactId String?
+  sectionKey      String?
+  reason          String?
+  createdAt       DateTime             @default(now())
+
+  job           Job            @relation(fields: [jobId], references: [id])
+  user          User           @relation(fields: [decidedBy], references: [id])
+  candidateFact CandidateFact? @relation(fields: [candidateFactId], references: [id])
+  memoryItems   MemoryItem[]
 
   @@map("review_decisions")
+}
+
+model MemoryItem {
+  id                    String   @id @default(uuid())
+  jobId                 String
+  reviewDecisionId      String
+  sourceCandidateFactId String?
+  memoryType            FactType
+  isManual              Boolean  @default(false)
+  summary               String
+  materialName          String?
+  quantity              String?
+  unit                  String?
+  supplierName          String?
+  deliveryTiming        String?
+  locationOrUse         String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  job            Job            @relation(fields: [jobId], references: [id])
+  reviewDecision ReviewDecision @relation(fields: [reviewDecisionId], references: [id])
+  sourceFact     CandidateFact? @relation(fields: [sourceCandidateFactId], references: [id])
+
+  @@map("memory_items")
 }
