@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    name: Build, test, audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+        env:
+          # prisma generate reads the schema only — no live DB needed.
+          # Dummy value satisfies the env() reference in schema.prisma.
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+      - name: Type check and build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+        env:
+          # Tests mock Prisma entirely — no live DB or real providers needed.
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          # TRANSCRIPTION_PROVIDER and EXTRACTION_PROVIDER default to fake.
+          # OPENAI_API_KEY is intentionally absent.
+
+      - name: Security audit
+        run: npm audit --audit-level=high
