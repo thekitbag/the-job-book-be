@@ -6,6 +6,18 @@ import { ErrorCode } from '../types/errors.js'
 const COOKIE_NAME = 'pilot_session'
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60 // 30 days
 
+// Browsers only delete a cookie if the clearing Set-Cookie uses the same
+// Domain/Path/Secure/SameSite attributes that were present when it was set.
+function sessionCookieOptions(isProduction: boolean) {
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? ('none' as const) : ('lax' as const),
+    domain: isProduction ? (process.env.COOKIE_DOMAIN ?? '.thejobbook.app') : undefined,
+    path: '/',
+  }
+}
+
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{ Body: { passcode?: string } }>('/api/auth/pilot-login', async (request, reply) => {
     const { passcode } = request.body ?? {}
@@ -36,11 +48,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     const isProduction = process.env.NODE_ENV === 'production'
 
     reply.setCookie(COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      domain: isProduction ? (process.env.COOKIE_DOMAIN ?? '.thejobbook.app') : undefined,
-      path: '/',
+      ...sessionCookieOptions(isProduction),
       maxAge: COOKIE_MAX_AGE,
     })
 
@@ -48,7 +56,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   })
 
   fastify.post('/api/auth/logout', async (_request, reply) => {
-    reply.clearCookie(COOKIE_NAME, { path: '/' })
+    const isProduction = process.env.NODE_ENV === 'production'
+    reply.clearCookie(COOKIE_NAME, sessionCookieOptions(isProduction))
     return reply.send({ ok: true })
   })
 }

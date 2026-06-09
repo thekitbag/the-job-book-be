@@ -56,6 +56,7 @@ beforeEach(async () => {
     SESSION_COOKIE_SECRET: process.env.SESSION_COOKIE_SECRET,
     FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN,
     NODE_ENV: process.env.NODE_ENV,
+    COOKIE_DOMAIN: process.env.COOKIE_DOMAIN,
   }
 
   process.env.PILOT_PASSCODE = TEST_PASSCODE
@@ -146,6 +147,23 @@ describe('POST /api/auth/logout', () => {
     expect(setCookie).toMatch(/pilot_session=/)
     // Clearing is done by setting MaxAge=0 or Expires in the past
     expect(setCookie).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
+  })
+
+  it('production: clearing cookie carries matching Domain/Secure/SameSite so browser deletes it', async () => {
+    process.env.NODE_ENV = 'production'
+    process.env.COOKIE_DOMAIN = '.thejobbook.app'
+
+    const res = await app.inject({ method: 'POST', url: '/api/auth/logout' })
+
+    expect(res.statusCode).toBe(200)
+    const setCookie = res.headers['set-cookie'] as string
+    expect(setCookie).toMatch(/pilot_session=/)
+    expect(setCookie).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
+    expect(setCookie).toMatch(/HttpOnly/i)
+    expect(setCookie).toMatch(/Secure/i)
+    expect(setCookie).toMatch(/SameSite=None/i)
+    expect(setCookie).toMatch(/Domain=\.thejobbook\.app/i)
+    expect(setCookie).toMatch(/Path=\//i)
   })
 })
 
