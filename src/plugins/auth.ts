@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin'
 import type { FastifyPluginAsync } from 'fastify'
 import { prisma } from '../db/client.js'
+import { verifySessionToken } from '../lib/session.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -8,32 +9,53 @@ declare module 'fastify' {
   }
 }
 
-// Minimal pilot auth: accepts X-Pilot-User-Id header or falls back to the
-// seeded pilot user. Replace with proper JWT/session auth before any non-pilot use.
+const COOKIE_NAME = 'pilot_session'
+
 const authPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest('userId', '')
 
   fastify.addHook('preHandler', async (request, reply) => {
-    const pilotUserId = process.env.PILOT_USER_ID
-    const headerUserId = request.headers['x-pilot-user-id']
+    // Auth endpoints handle their own auth
+    if (request.url.startsWith('/api/auth/')) return
 
-    const userId =
-      typeof headerUserId === 'string' && headerUserId.length > 0
-        ? headerUserId
-        : pilotUserId
+    const secret = process.env.SESSION_COOKIE_SECRET ?? 'dev-secret-change-in-production'
 
-    if (!userId) {
-      reply.code(401).send({ code: 'UNAUTHORIZED', message: 'No user identity provided' })
-      return
+    // 1. Session cookie — primary auth (dev + production)
+    const sessionCookie = request.cookies?.[COOKIE_NAME]
+    if (sessionCookie) {
+      const payload = verifySessionToken(sessionCookie, secret)
+      if (payload) {
+        const user = await prisma.user.findUnique({ where: { id: payload.userId } })
+        if (user) {
+          request.userId = user.id
+          return
+        }
+      }
+      // Cookie present but invalid/expired — fall through to header check in dev, or reject in production
+      if (process.env.NODE_ENV === 'production') {
+        reply.code(401).send({ code: 'UNAUTHORIZED', message: 'Invalid or expired session' })
+        return
+      }
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } })
-    if (!user) {
-      reply.code(401).send({ code: 'UNAUTHORIZED', message: 'User not found' })
-      return
+    // 2. X-Pilot-User-Id header — dev only
+    if (process.env.NODE_ENV !== 'production') {
+      const headerUserId =
+        typeof request.headers['x-pilot-user-id'] === 'string' &&
+        request.headers['x-pilot-user-id'].length > 0
+          ? request.headers['x-pilot-user-id']
+          : process.env.PILOT_USER_ID
+
+      if (headerUserId) {
+        const user = await prisma.user.findUnique({ where: { id: headerUserId } })
+        if (user) {
+          request.userId = user.id
+          return
+        }
+      }
     }
 
-    request.userId = user.id
+    reply.code(401).send({ code: 'UNAUTHORIZED', message: 'No valid session' })
   })
 }
 

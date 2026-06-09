@@ -1,9 +1,11 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
+import cookie from '@fastify/cookie'
 import multipart from '@fastify/multipart'
 import authPlugin from './plugins/auth.js'
 import jobsRoutes from './routes/jobs.js'
 import notesRoutes from './routes/notes.js'
+import authRoutes from './routes/auth.js'
 import { createStorageProvider } from './storage/index.js'
 import type { AudioStorageProvider } from './storage/index.js'
 import { createTranscriptionProvider } from './transcription/index.js'
@@ -33,22 +35,29 @@ export function buildApp(opts: AppOptions = {}) {
   const extraction = opts.extraction ?? createExtractionProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
 
-  const rawOrigins = process.env.CORS_ORIGIN ?? 'https://localhost:5173'
-  const allowedOrigins = rawOrigins.split(',').map((o) => o.trim())
-
   fastify.register(cors, {
+    credentials: true,
     origin: (origin, cb) => {
-      // No origin header means same-origin or server-to-server — allow.
-      // Unrecognised origins: don't throw, just omit CORS headers (browser blocks client-side).
-      cb(null, !origin || allowedOrigins.includes(origin))
+      // No origin header: same-origin or server-to-server — allow
+      if (!origin) { cb(null, true); return }
+      // Read at request time so tests can change env between requests
+      // FRONTEND_ORIGIN is the canonical production env var; CORS_ORIGIN kept for local dev compat
+      const rawOrigins = process.env.FRONTEND_ORIGIN ?? process.env.CORS_ORIGIN ?? 'https://localhost:5173'
+      const allowedOrigins = rawOrigins.split(',').map((o) => o.trim())
+      cb(null, allowedOrigins.includes(origin))
     },
   })
+
+  fastify.register(cookie)
 
   fastify.register(multipart, {
     limits: {
       fileSize: maxAudioBytes,
     },
   })
+
+  // Auth routes bypass the auth plugin (login/logout handle their own flow)
+  fastify.register(authRoutes)
 
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)
