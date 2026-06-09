@@ -64,7 +64,7 @@ function formatReviewFact(f: {
 function formatMemoryItem(m: {
   id: string
   jobId: string
-  reviewDecisionId: string
+  reviewDecisionId: string | null
   sourceCandidateFactId: string | null
   memoryType: string
   isManual: boolean

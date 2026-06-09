@@ -14,6 +14,7 @@ import { createExtractionProvider } from './extraction/index.js'
 import type { ExtractionProvider } from './extraction/index.js'
 import factsRoutes from './routes/facts.js'
 import reviewRoutes from './routes/review.js'
+import tidyUpRoutes from './routes/tidy-up.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
 
 export interface AppOptions {
@@ -64,6 +65,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(notesRoutes, { storage, transcription, extraction })
   fastify.register(factsRoutes)
   fastify.register(reviewRoutes)
+  fastify.register(tidyUpRoutes)
 
   // @fastify/multipart v9 calls req.raw.destroy(err) when the file size limit is exceeded,
   // which bypasses route try/catch and lands here. Remap to our stable error code.

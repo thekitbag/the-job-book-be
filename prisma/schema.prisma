@@ -17,6 +17,7 @@ model User {
 
   jobs            Job[]
   reviewDecisions ReviewDecision[]
+  tidyUpDecisions TidyUpDecision[]
 
   @@map("users")
 }
@@ -42,6 +43,9 @@ model Job {
   candidateFacts  CandidateFact[]
   reviewDecisions ReviewDecision[]
   memoryItems     MemoryItem[]
+  tidyUpRuns      TidyUpRun[]
+  tidyUpItems     TidyUpItem[]
+  tidyUpDecisions TidyUpDecision[]
 
   @@map("jobs")
 }
@@ -235,7 +239,8 @@ model ReviewDecision {
 model MemoryItem {
   id                    String   @id @default(uuid())
   jobId                 String
-  reviewDecisionId      String
+  reviewDecisionId      String?  // set for per-note review decisions; null for tidy-up decisions
+  tidyUpDecisionId      String?  // set for tidy-up decisions; null for per-note review decisions
   sourceCandidateFactId String?
   memoryType            FactType
   isManual              Boolean  @default(false)
@@ -249,9 +254,94 @@ model MemoryItem {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  job            Job            @relation(fields: [jobId], references: [id])
-  reviewDecision ReviewDecision @relation(fields: [reviewDecisionId], references: [id])
-  sourceFact     CandidateFact? @relation(fields: [sourceCandidateFactId], references: [id])
+  job            Job             @relation(fields: [jobId], references: [id])
+  reviewDecision ReviewDecision? @relation(fields: [reviewDecisionId], references: [id])
+  sourceFact     CandidateFact?  @relation(fields: [sourceCandidateFactId], references: [id])
 
   @@map("memory_items")
+}
+
+// ── Story 8: End-Of-Day Tidy-Up ───────────────────────────────────────────────
+
+enum TidyUpItemKind {
+  SINGLE
+  DUPLICATE_GROUP
+  CONTRADICTION
+  UNCLEAR_PROMPT
+}
+
+enum TidyUpItemStatus {
+  DRAFT
+  CONFIRMED
+  CORRECTED
+  REJECTED
+  LEFT_UNCONFIRMED
+}
+
+enum TidyUpDecisionAction {
+  CONFIRM
+  CORRECT
+  REJECT
+  LEAVE_UNCONFIRMED
+}
+
+// One tidy-up pass for a job+day. Multiple runs may exist if forceRefresh is used.
+model TidyUpRun {
+  id        String   @id @default(uuid())
+  jobId     String
+  localDate String   // YYYY-MM-DD as submitted by the client
+  status    String   @default("ready") // ready | failed
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  job   Job          @relation(fields: [jobId], references: [id])
+  items TidyUpItem[]
+
+  @@index([jobId, localDate])
+  @@map("tidy_up_runs")
+}
+
+// One reviewable item within a tidy-up run, representing one or more source candidate facts.
+model TidyUpItem {
+  id                     String           @id @default(uuid())
+  tidyUpRunId            String
+  jobId                  String
+  sectionKey             String
+  kind                   TidyUpItemKind
+  status                 TidyUpItemStatus @default(DRAFT)
+  reviewLabel            String
+  summary                String
+  proposedMemory         Json
+  confidenceLabel        String           @default("medium")
+  uncertaintyFlags       String[]
+  sourceCandidateFactIds String[]
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  tidyUpRun TidyUpRun       @relation(fields: [tidyUpRunId], references: [id])
+  job       Job             @relation(fields: [jobId], references: [id])
+  decisions TidyUpDecision[]
+
+  @@map("tidy_up_items")
+}
+
+// Audit record for a Mike decision on one tidy-up item.
+// sourceCandidateFactIds preserves all source fact links for multi-source memory items.
+model TidyUpDecision {
+  id                     String               @id @default(uuid())
+  tidyUpItemId           String
+  jobId                  String
+  decidedBy              String
+  action                 TidyUpDecisionAction
+  correctedFields        Json?
+  reason                 String?
+  memoryItemId           String?              // set after memory item created; null for reject/leave
+  sourceCandidateFactIds String[]
+  createdAt              DateTime             @default(now())
+
+  tidyUpItem TidyUpItem @relation(fields: [tidyUpItemId], references: [id])
+  job        Job        @relation(fields: [jobId], references: [id])
+  user       User       @relation(fields: [decidedBy], references: [id])
+
+  @@map("tidy_up_decisions")
 }
