@@ -15,6 +15,7 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest('userId', '')
 
   fastify.addHook('preHandler', async (request, reply) => {
+    if (request.url === '/health') return
     // Auth endpoints handle their own auth
     if (request.url.startsWith('/api/auth/')) return
 

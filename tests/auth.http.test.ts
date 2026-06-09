@@ -80,6 +80,16 @@ afterEach(() => {
   }
 })
 
+// ─── GET /health ─────────────────────────────────────────────────────────────
+
+describe('GET /health', () => {
+  it('returns 200 with no credentials', async () => {
+    const res = await app.inject({ method: 'GET', url: '/health' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ status: 'ok' })
+  })
+})
+
 // ─── POST /api/auth/pilot-login ───────────────────────────────────────────────
 
 describe('POST /api/auth/pilot-login', () => {
