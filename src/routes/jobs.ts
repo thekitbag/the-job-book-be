@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify'
-import { getCurrentJob, listJobs, getJob } from '../services/jobs.js'
+import { getCurrentJob, listJobs, getJob, createJob } from '../services/jobs.js'
 import { ErrorCode } from '../types/errors.js'
 
 const jobsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -25,6 +25,16 @@ const jobsRoutes: FastifyPluginAsync = async (fastify) => {
       return handleServiceError(err, reply)
     }
   })
+
+  fastify.post('/api/jobs', async (request, reply) => {
+    try {
+      const body = request.body as Record<string, unknown> | null | undefined
+      const job = await createJob(request.userId, body?.title, body?.jobType)
+      return reply.code(201).send(job)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
 }
 
 const STATUS_MAP: Record<string, number> = {
@@ -37,6 +47,7 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.NOTE_DUPLICATE_CLIENT_ID]: 409,
   [ErrorCode.ALREADY_REVIEWED]: 409,
   [ErrorCode.MISSING_FIELD]: 400,
+  [ErrorCode.INVALID_FIELD]: 400,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {

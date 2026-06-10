@@ -42,6 +42,7 @@ model Job {
   candidateFacts  CandidateFact[]
   reviewDecisions ReviewDecision[]
   memoryItems     MemoryItem[]
+  queueItems      QueueItem[]
 
   @@map("jobs")
 }
@@ -212,6 +213,9 @@ enum ReviewDecisionAction {
   REJECT
   CONFIRM_SECTION
   ADD_MISSING
+  QUEUE_CONFIRM
+  QUEUE_CORRECT
+  QUEUE_DISMISS
 }
 
 model ReviewDecision {
@@ -219,10 +223,11 @@ model ReviewDecision {
   jobId           String
   decidedBy       String
   action          ReviewDecisionAction
-  candidateFactId String?
-  sectionKey      String?
-  reason          String?
-  createdAt       DateTime             @default(now())
+  candidateFactId        String?
+  sectionKey             String?
+  reason                 String?
+  sourceCandidateFactIds String[]             @default([])
+  createdAt              DateTime             @default(now())
 
   job           Job            @relation(fields: [jobId], references: [id])
   user          User           @relation(fields: [decidedBy], references: [id])
@@ -254,4 +259,26 @@ model MemoryItem {
   sourceFact     CandidateFact? @relation(fields: [sourceCandidateFactId], references: [id])
 
   @@map("memory_items")
+}
+
+model QueueItem {
+  id                     String   @id @default(uuid())
+  jobId                  String
+  sectionKey             String
+  kind                   String
+  status                 String   @default("draft")
+  reviewLabel            String
+  timeLabel              String?
+  summary                String
+  proposedMemory         Json
+  confidenceLabel        String   @default("medium")
+  uncertaintyFlags       String[]
+  sourceCandidateFactIds String[]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id])
+
+  @@index([jobId])
+  @@map("queue_items")
 }
