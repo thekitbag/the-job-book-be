@@ -36,7 +36,8 @@ vi.mock('../src/db/client.js', () => ({
     memoryItem: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     queueItem: {
       deleteMany: vi.fn(),
-      createManyAndReturn: vi.fn(),
+      createMany: vi.fn(),
+      findMany: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
     },
@@ -204,7 +205,8 @@ beforeEach(async () => {
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.candidateFact.updateMany as any).mockResolvedValue({ count: 1 })
   vi.mocked(prisma.queueItem.deleteMany as any).mockResolvedValue({ count: 0 })
-  vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([])
+  vi.mocked(prisma.queueItem.createMany as any).mockResolvedValue({ count: 0 })
+  vi.mocked(prisma.queueItem.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(null)
   vi.mocked(prisma.queueItem.update as any).mockResolvedValue({})
   vi.mocked(prisma.reviewDecision.create as any).mockResolvedValue({ id: DECISION_ID })
@@ -239,7 +241,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
   it('creates a single item for one DRAFT fact', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([makeQueueItem()])
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([makeQueueItem()])
 
     const res = await app.inject({
       method: 'GET',
@@ -259,7 +261,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
   it('item includes sourceContext with noteId, transcriptId, capturedAt, transcriptText', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([makeQueueItem()])
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([makeQueueItem()])
 
     const res = await app.inject({
       method: 'GET',
@@ -281,7 +283,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
   it('groups two same-name same-quantity facts as duplicate_group', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact(), makeFact2()])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
       makeQueueItem({ kind: 'DUPLICATE_GROUP', reviewLabel: 'Looks like the same item', sourceCandidateFactIds: [FACT_ID, FACT_ID_2] }),
     ])
 
@@ -292,8 +294,8 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     })
 
     expect(res.statusCode).toBe(200)
-    // Verify the grouping service passed a DUPLICATE_GROUP item to createManyAndReturn
-    const callData = vi.mocked(prisma.queueItem.createManyAndReturn as any).mock.calls[0]?.[0]?.data ?? []
+    // Verify the grouping service passed a DUPLICATE_GROUP item to createMany
+    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
     expect(callData.some((d: any) => d.kind === 'DUPLICATE_GROUP')).toBe(true)
 
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
@@ -308,7 +310,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       makeFact({ quantity: '6' }),
       makeFact2({ quantity: '12' }),
     ])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
       makeQueueItem({ kind: 'CONTRADICTION', reviewLabel: 'Worth checking' }),
     ])
 
@@ -318,7 +320,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       headers: { 'x-pilot-user-id': USER_ID },
     })
 
-    const callData = vi.mocked(prisma.queueItem.createManyAndReturn as any).mock.calls[0]?.[0]?.data ?? []
+    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
     expect(callData.some((d: any) => d.kind === 'CONTRADICTION')).toBe(true)
 
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
@@ -331,7 +333,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
       makeFact({ factType: 'UNCLEAR', materialName: null, quantity: null }),
     ])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
       makeQueueItem({ sectionKey: 'unclear_items', kind: 'UNCLEAR_PROMPT', reviewLabel: 'Needs clarification' }),
     ])
 
@@ -341,7 +343,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       headers: { 'x-pilot-user-id': USER_ID },
     })
 
-    const callData = vi.mocked(prisma.queueItem.createManyAndReturn as any).mock.calls[0]?.[0]?.data ?? []
+    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
     expect(callData.some((d: any) => d.kind === 'UNCLEAR_PROMPT')).toBe(true)
 
     const unclearSection = res.json().sections.find((s: any) => s.key === 'unclear_items')
@@ -353,7 +355,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
       makeFact({ sourceNote: { id: NOTE_ID, capturedAt: TODAY_CAPTURE } }),
     ])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([
+    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
       makeQueueItem({ timeLabel: 'Today' }),
     ])
 
@@ -363,18 +365,17 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       headers: { 'x-pilot-user-id': USER_ID },
     })
 
-    // Verify the service computed timeLabel='Today' when passing to createManyAndReturn
-    const callData = vi.mocked(prisma.queueItem.createManyAndReturn as any).mock.calls[0]?.[0]?.data ?? []
+    // Verify the service computed timeLabel='Today' when passing to createMany
+    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
     expect(callData[0]?.timeLabel).toBe('Today')
 
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
     expect(item.timeLabel).toBe('Today')
   })
 
-  it('deletes existing queue items before regenerating', async () => {
+  it('deleteMany targets only stale DRAFT items, not decided items', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
-    vi.mocked(prisma.queueItem.createManyAndReturn as any).mockResolvedValue([makeQueueItem()])
 
     await app.inject({
       method: 'GET',
@@ -382,7 +383,11 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       headers: { 'x-pilot-user-id': USER_ID },
     })
 
-    expect(prisma.queueItem.deleteMany).toHaveBeenCalledWith({ where: { jobId: JOB_ID } })
+    const deleteCall = vi.mocked(prisma.queueItem.deleteMany as any).mock.calls[0]?.[0]
+    expect(deleteCall.where.jobId).toBe(JOB_ID)
+    expect(deleteCall.where.status).toBe('draft')
+    // notIn constraint means decided (non-draft) items are never touched
+    expect(deleteCall.where.id).toHaveProperty('notIn')
   })
 
   it('includes alreadyRemembered memory items', async () => {
@@ -404,6 +409,48 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       memoryType: 'used_material',
     })
     expect(body.alreadyRemembered[0].timeLabel).toBeDefined()
+  })
+
+  it('item ID is stable: createMany receives the same deterministic ID on consecutive GETs', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
+
+    // First GET
+    await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/review-queue`, headers: { 'x-pilot-user-id': USER_ID } })
+    const firstId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data?.[0]?.id
+
+    // Second GET (simulating a concurrent refresh or page reload)
+    await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/review-queue`, headers: { 'x-pilot-user-id': USER_ID } })
+    const secondId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[1]?.[0]?.data?.[0]?.id
+
+    expect(firstId).toBeDefined()
+    expect(firstId).toBe(secondId)
+  })
+
+  it('decision submitted with ID from first GET succeeds after a second GET runs', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
+
+    // First GET — capture the stable ID the service would pass to createMany
+    await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/review-queue`, headers: { 'x-pilot-user-id': USER_ID } })
+    const stableId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data?.[0]?.id
+    expect(stableId).toBeDefined()
+
+    // Second GET happens on another device before Mike submits his decision
+    await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/review-queue`, headers: { 'x-pilot-user-id': USER_ID } })
+
+    // Decision using the ID from the first GET — findFirst finds the item (stable ID persists)
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeQueueItem({ id: stableId }))
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: stableId, action: 'confirm' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json().queueItemId).toBe(stableId)
   })
 
   it('returns 404 when job not found', async () => {
@@ -664,6 +711,50 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
       where: { id: { in: [FACT_ID] } },
       data: { status: 'CORRECTED' },
     })
+  })
+
+  it('confirm on duplicate group preserves both source fact IDs on the review decision', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ kind: 'DUPLICATE_GROUP', sourceCandidateFactIds: [FACT_ID, FACT_ID_2] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm' },
+    })
+
+    expect(prisma.reviewDecision.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          sourceCandidateFactIds: [FACT_ID, FACT_ID_2],
+        }),
+      }),
+    )
+  })
+
+  it('dismiss on duplicate group preserves both source fact IDs on the review decision', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ kind: 'DUPLICATE_GROUP', sourceCandidateFactIds: [FACT_ID, FACT_ID_2] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'dismiss' },
+    })
+
+    expect(prisma.reviewDecision.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          sourceCandidateFactIds: [FACT_ID, FACT_ID_2],
+        }),
+      }),
+    )
   })
 
   it('contradiction can be corrected into memory', async () => {

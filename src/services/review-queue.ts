@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 
@@ -29,6 +30,16 @@ const VALID_MEMORY_TYPES = new Set([
   'ordered_material', 'used_material', 'leftover_material',
   'supplier_delivery_note', 'customer_change', 'watch_out',
 ])
+
+// Stable deterministic ID derived from the job + sorted source fact IDs.
+// Same inputs always produce the same ID so GET regenerations never invalidate
+// in-flight decision requests from a prior GET.
+function computeGroupId(jobId: string, factIds: string[]): string {
+  const h = createHash('sha256')
+    .update(`${jobId}:${[...factIds].sort().join('|')}`)
+    .digest('hex')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -281,26 +292,40 @@ export async function getReviewQueue(jobId: string, userId: string) {
   const factMap = new Map(facts.map((f) => [f.id, f]))
   const grouped = groupAllFacts(facts)
 
-  await prisma.queueItem.deleteMany({ where: { jobId } })
+  // Assign deterministic IDs so the same grouping always yields the same UUID.
+  const itemsWithIds = grouped.map((item) => ({
+    id: computeGroupId(jobId, item.sourceCandidateFactIds),
+    jobId,
+    sectionKey: item.sectionKey,
+    kind: item.kind,
+    status: 'draft',
+    reviewLabel: item.reviewLabel,
+    timeLabel: groupTimeLabel(item.sourceCandidateFactIds, factMap, now),
+    summary: item.summary,
+    proposedMemory: item.proposedMemory as object,
+    confidenceLabel: item.confidenceLabel,
+    uncertaintyFlags: item.uncertaintyFlags,
+    sourceCandidateFactIds: item.sourceCandidateFactIds,
+  }))
+  const currentIds = itemsWithIds.map((i) => i.id)
 
-  const queueItems =
-    grouped.length > 0
-      ? await prisma.queueItem.createManyAndReturn({
-          data: grouped.map((item) => ({
-            jobId,
-            sectionKey: item.sectionKey,
-            kind: item.kind,
-            status: 'draft',
-            reviewLabel: item.reviewLabel,
-            timeLabel: groupTimeLabel(item.sourceCandidateFactIds, factMap, now),
-            summary: item.summary,
-            proposedMemory: item.proposedMemory as object,
-            confidenceLabel: item.confidenceLabel,
-            uncertaintyFlags: item.uncertaintyFlags,
-            sourceCandidateFactIds: item.sourceCandidateFactIds,
-          })),
-        })
-      : []
+  // Remove DRAFT items whose source facts are no longer unresolved.
+  // Never touch decided (confirmed/corrected/dismissed) items — they are the audit trail.
+  await prisma.queueItem.deleteMany({
+    where: currentIds.length > 0
+      ? { jobId, status: 'draft', id: { notIn: currentIds } }
+      : { jobId, status: 'draft' },
+  })
+
+  // Create items that don't exist yet; skip if the stable ID already exists.
+  if (itemsWithIds.length > 0) {
+    await prisma.queueItem.createMany({ data: itemsWithIds, skipDuplicates: true })
+  }
+
+  const queueItems = await prisma.queueItem.findMany({
+    where: { jobId, status: 'draft' },
+    orderBy: { createdAt: 'asc' },
+  })
 
   const memoryItems = await prisma.memoryItem.findMany({
     where: { jobId },
@@ -386,6 +411,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           decidedBy: userId,
           action: 'QUEUE_CONFIRM',
           candidateFactId: sourceCandidateFactIds[0] ?? null,
+          sourceCandidateFactIds,
         },
       })
 
@@ -436,6 +462,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           decidedBy: userId,
           action: 'QUEUE_CORRECT',
           candidateFactId: sourceCandidateFactIds[0] ?? null,
+          sourceCandidateFactIds,
         },
       })
 
@@ -484,6 +511,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
         action: 'QUEUE_DISMISS',
         candidateFactId: sourceCandidateFactIds[0] ?? null,
         reason: payload.reason ?? null,
+        sourceCandidateFactIds,
       },
     })
 
