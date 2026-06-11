@@ -14,6 +14,7 @@ const FACT_ID = 'inspect-fact-1'
 const DECISION_ID = 'inspect-decision-1'
 const MEMORY_ID = 'inspect-memory-1'
 const QUEUE_ITEM_ID = 'inspect-qi-1'
+const FACT_ID_2 = 'inspect-fact-2'
 const INSPECTION_KEY = 'test-inspection-key-secret'
 
 vi.mock('../src/db/client.js', () => ({
@@ -200,6 +201,10 @@ beforeEach(async () => {
   vi.mocked(prisma.rawNote.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeNote()])
   vi.mocked(prisma.reviewDecision.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeDecision()])
   vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeMemoryItem()])
+  // buildFreshQueueSections calls candidateFact.findMany, deleteMany, createMany, then findMany
+  vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+  vi.mocked(prisma.queueItem.deleteMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 })
+  vi.mocked(prisma.queueItem.createMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 })
   vi.mocked(prisma.queueItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
 })
 
@@ -371,9 +376,9 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
 
     const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
     const body = res.json<{ queue: { sections: Array<{ key: string; label: string; items: unknown[] }> } }>()
-    expect(body.queue.sections).toHaveLength(1)
-    expect(body.queue.sections[0].key).toBe('ordered_materials')
-    expect(body.queue.sections[0].items).toHaveLength(1)
+    const ordered = body.queue.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered).toBeDefined()
+    expect(ordered?.items).toHaveLength(1)
   })
 
   it('includes trusted memory items with normalized type', async () => {
@@ -424,5 +429,68 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
     const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
     const body = res.json<{ possibleMisses: unknown[] }>()
     expect(body.possibleMisses).toHaveLength(0)
+  })
+
+  it('generates fresh queue from candidate facts even when queueItem table is empty/stale', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    // Unresolved fact exists, but no persisted queue items (simulates stale/never-refreshed state).
+    // buildFreshQueueSections includes sourceNote + transcript on each fact (groupTimeLabel needs capturedAt).
+    vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        ...makeFact({ status: 'DRAFT', id: FACT_ID }),
+        sourceNote: { id: NOTE_ID, capturedAt: new Date('2026-06-11T09:15:00.000Z') },
+        transcript: { id: TRANSCRIPT_ID, text: 'Ordered plasterboard' },
+      },
+    ])
+    vi.mocked(prisma.queueItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeQueueItem()])
+
+    const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    // Verify createMany was called — fresh items were generated, not just read from DB
+    expect(vi.mocked(prisma.queueItem.createMany as ReturnType<typeof vi.fn>)).toHaveBeenCalled()
+    const body = res.json<{ queue: { sections: Array<{ key: string; items: unknown[] }> } }>()
+    const ordered = body.queue.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(1)
+  })
+
+  it('links secondary facts in a duplicate group to the resulting memory item via review decision', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const decision = makeDecision({
+      sourceCandidateFactIds: [FACT_ID, FACT_ID_2],
+      candidateFactId: null,
+    })
+    const memory = makeMemoryItem({
+      sourceCandidateFactId: FACT_ID, // primary only; FACT_ID_2 is secondary
+      reviewDecisionId: DECISION_ID,
+    })
+    const secondaryFact = makeFact({ id: FACT_ID_2, status: 'CONFIRMED' })
+    const note = makeNote({ candidateFacts: [makeFact({ status: 'CONFIRMED' }), secondaryFact] })
+
+    vi.mocked(prisma.rawNote.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([note])
+    vi.mocked(prisma.reviewDecision.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([decision])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([memory])
+
+    const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ notesByDay: Array<{ notes: Array<{ candidateFacts: Array<{ id: string; memoryItemIds: string[] }> }> }> }>()
+    const facts = body.notesByDay[0].notes[0].candidateFacts
+    const secondary = facts.find((f) => f.id === FACT_ID_2)
+    expect(secondary?.memoryItemIds).toContain(MEMORY_ID)
+  })
+
+  it('groups notes under UK local date, not UTC date — note at 23:30 UTC lands on next BST day', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    // 2026-06-10T23:30Z = 2026-06-11T00:30 BST (UTC+1 in summer)
+    vi.mocked(prisma.rawNote.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeNote({ capturedAt: new Date('2026-06-10T23:30:00.000Z'), transcripts: [], candidateFacts: [] }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ notesByDay: Array<{ localDate: string }> }>()
+    expect(body.notesByDay[0].localDate).toBe('2026-06-11')
   })
 })

@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
+import { buildFreshQueueSections } from './review-queue.js'
 
 // ── Status normalisers ────────────────────────────────────────────────────────
 
@@ -33,10 +34,11 @@ const DECISION_ACTION_MAP: Record<string, string> = {
 const POSSIBLE_MISS_PATTERN =
   /\b(order(?:ed)?|material|deliver(?:y|ed)?|supplier|bought|purchase(?:d)?|plasterboard|timber|brick|concrete|cement|sheet|beam|bolt|screw|nail|insulation|frame|joist|rafter|truss)\b/i
 
-// ── Label helpers ─────────────────────────────────────────────────────────────
+// ── UK local date (Europe/London, handles BST/GMT automatically) ──────────────
+// en-CA produces YYYY-MM-DD; combined with the timezone this gives the pilot's local date.
 
-function sectionLabel(key: string): string {
-  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+function toUKDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(date)
 }
 
 // ── Review state for a candidate fact ─────────────────────────────────────────
@@ -70,7 +72,7 @@ export async function getJobInspection(jobId: string, userId: string) {
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
   if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
-  const [notes, decisions, memoryItems, queueItems] = await Promise.all([
+  const [notes, decisions, memoryItems] = await Promise.all([
     prisma.rawNote.findMany({
       where: { jobId },
       include: {
@@ -88,11 +90,11 @@ export async function getJobInspection(jobId: string, userId: string) {
       where: { jobId },
       orderBy: { createdAt: 'asc' },
     }),
-    prisma.queueItem.findMany({
-      where: { jobId, status: 'draft' },
-      orderBy: { createdAt: 'asc' },
-    }),
   ])
+
+  // Generate a fresh queue from current unresolved facts (same generation path
+  // as the review-queue route — ensures inspection always reflects current state).
+  const { sections: queueSections } = await buildFreshQueueSections(jobId, new Date())
 
   // Build fact → decision IDs map (via candidateFactId and sourceCandidateFactIds)
   const decisionsByFactId = new Map<string, string[]>()
@@ -109,7 +111,11 @@ export async function getJobInspection(jobId: string, userId: string) {
     }
   }
 
-  // Build fact → memory item IDs map
+  // Build fact → memory item IDs map.
+  // Primary: MemoryItem.sourceCandidateFactId.
+  // Secondary: all facts in the linked review decision's sourceCandidateFactIds
+  // — captures secondary sources in duplicate/contradiction groups.
+  const decisionsById = new Map(decisions.map((d) => [d.id, d]))
   const memoryByFactId = new Map<string, string[]>()
   for (const m of memoryItems) {
     if (m.sourceCandidateFactId) {
@@ -117,12 +123,21 @@ export async function getJobInspection(jobId: string, userId: string) {
       existing.push(m.id)
       memoryByFactId.set(m.sourceCandidateFactId, existing)
     }
+    const dec = decisionsById.get(m.reviewDecisionId)
+    if (dec) {
+      for (const fid of dec.sourceCandidateFactIds) {
+        if (fid === m.sourceCandidateFactId) continue
+        const existing = memoryByFactId.get(fid) ?? []
+        if (!existing.includes(m.id)) existing.push(m.id)
+        memoryByFactId.set(fid, existing)
+      }
+    }
   }
 
-  // Group notes by UTC date of capturedAt, days newest first
+  // Group notes by UK local date of capturedAt, days newest first
   const dayMap = new Map<string, typeof notes>()
   for (const note of notes) {
-    const day = note.capturedAt.toISOString().slice(0, 10)
+    const day = toUKDate(note.capturedAt)
     if (!dayMap.has(day)) dayMap.set(day, [])
     dayMap.get(day)!.push(note)
   }
@@ -133,29 +148,6 @@ export async function getJobInspection(jobId: string, userId: string) {
       localDate,
       notes: dayNotes.map((n) => formatNote(n, decisionsByFactId, memoryByFactId)),
     }))
-
-  // Group current draft queue items by section
-  const sectionMap = new Map<string, typeof queueItems>()
-  for (const item of queueItems) {
-    if (!sectionMap.has(item.sectionKey)) sectionMap.set(item.sectionKey, [])
-    sectionMap.get(item.sectionKey)!.push(item)
-  }
-
-  const queue = {
-    sections: Array.from(sectionMap.entries()).map(([key, items]) => ({
-      key,
-      label: sectionLabel(key),
-      items: items.map((item) => ({
-        id: item.id,
-        kind: item.kind,
-        reviewLabel: item.reviewLabel,
-        summary: item.summary,
-        confidenceLabel: item.confidenceLabel,
-        uncertaintyFlags: item.uncertaintyFlags,
-        sourceCandidateFactIds: item.sourceCandidateFactIds,
-      })),
-    })),
-  }
 
   const possibleMisses = notes.flatMap((note) => {
     const transcript = note.transcripts[0] ?? null
@@ -183,7 +175,7 @@ export async function getJobInspection(jobId: string, userId: string) {
     },
     generatedAt: new Date().toISOString(),
     notesByDay,
-    queue,
+    queue: { sections: queueSections },
     reviewDecisions: decisions.map((d) => ({
       id: d.id,
       action: DECISION_ACTION_MAP[d.action] ?? d.action.toLowerCase(),
