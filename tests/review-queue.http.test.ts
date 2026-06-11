@@ -351,26 +351,31 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
   })
 
   it('assigns Today/Yesterday/Earlier time labels from capturedAt', async () => {
-    const { prisma } = await import('../src/db/client.js')
-    vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
-      makeFact({ sourceNote: { id: NOTE_ID, capturedAt: TODAY_CAPTURE } }),
-    ])
-    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
-      makeQueueItem({ timeLabel: 'Today' }),
-    ])
+    vi.useFakeTimers({ now: NOW })
+    try {
+      const { prisma } = await import('../src/db/client.js')
+      vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
+        makeFact({ sourceNote: { id: NOTE_ID, capturedAt: TODAY_CAPTURE } }),
+      ])
+      vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
+        makeQueueItem({ timeLabel: 'Today' }),
+      ])
 
-    const res = await app.inject({
-      method: 'GET',
-      url: `/api/jobs/${JOB_ID}/review-queue`,
-      headers: { 'x-pilot-user-id': USER_ID },
-    })
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/jobs/${JOB_ID}/review-queue`,
+        headers: { 'x-pilot-user-id': USER_ID },
+      })
 
-    // Verify the service computed timeLabel='Today' when passing to createMany
-    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
-    expect(callData[0]?.timeLabel).toBe('Today')
+      // Verify the service computed timeLabel='Today' when passing to createMany
+      const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
+      expect(callData[0]?.timeLabel).toBe('Today')
 
-    const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
-    expect(item.timeLabel).toBe('Today')
+      const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
+      expect(item.timeLabel).toBe('Today')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('deleteMany targets only stale DRAFT items, not decided items', async () => {
