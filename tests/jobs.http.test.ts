@@ -70,7 +70,7 @@ beforeEach(async () => {
 })
 
 describe('GET /api/jobs', () => {
-  it('returns only the authenticated users jobs', async () => {
+  it('returns only the authenticated users active jobs', async () => {
     const { prisma } = await import('../src/db/client.js')
     const jobs = [makeJob(), makeJob({ id: 'jobs-job-2', title: 'Bournemouth extension' })]
     vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(jobs)
@@ -85,15 +85,51 @@ describe('GET /api/jobs', () => {
     const body = res.json<unknown[]>()
     expect(body).toHaveLength(2)
     expect(vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { ownerUserId: USER_ID } })
+      expect.objectContaining({ where: { ownerUserId: USER_ID, status: 'ACTIVE' } })
     )
+  })
+
+  it('excludes archived and completed jobs from the list', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    // Prisma applies the filter — mock returns only what would pass the ACTIVE filter
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeJob({ status: 'ACTIVE' }),
+    ])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<Array<{ status: string }>>()
+    // Confirm the filter was applied at the query level
+    expect(vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'ACTIVE' }) })
+    )
+    expect(body).toHaveLength(1)
+    expect(body[0].status).toBe('active')
+  })
+
+  it('returns empty list when user has no active jobs', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual([])
   })
 
   it('returns normalized lowercase status in list response', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       makeJob({ status: 'ACTIVE' }),
-      makeJob({ id: 'jobs-job-2', status: 'COMPLETED' }),
     ])
 
     const res = await app.inject({
@@ -105,7 +141,6 @@ describe('GET /api/jobs', () => {
     expect(res.statusCode).toBe(200)
     const body = res.json<Array<{ status: string }>>()
     expect(body[0].status).toBe('active')
-    expect(body[1].status).toBe('completed')
   })
 })
 
