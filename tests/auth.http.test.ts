@@ -238,8 +238,33 @@ describe('Cookie-based auth', () => {
     expect(res.statusCode).toBe(401)
   })
 
+  it('production: X-Pilot-User-Id header alone is rejected with no cookie', async () => {
+    process.env.NODE_ENV = 'production'
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}`,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toMatchObject({ code: 'UNAUTHORIZED' })
+  })
+
+  it('production: PILOT_USER_ID env fallback alone is rejected with no cookie', async () => {
+    process.env.NODE_ENV = 'production'
+    // PILOT_USER_ID is already set in beforeEach; no cookie sent — env fallback must not authenticate
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}`,
+    })
+
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toMatchObject({ code: 'UNAUTHORIZED' })
+  })
+
   it('dev: X-Pilot-User-Id header still works when NODE_ENV is not production', async () => {
-    // Ensure NODE_ENV is not 'production'
     delete process.env.NODE_ENV
 
     const res = await app.inject({

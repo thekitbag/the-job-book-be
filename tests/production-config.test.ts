@@ -188,12 +188,35 @@ describe('validateProductionConfig', () => {
     expect(() => validateProductionConfig(env)).toThrow('R2_BUCKET')
   })
 
-  // AI providers
+  // INTERNAL_INSPECTION_KEY equality guard
+  it('rejects INTERNAL_INSPECTION_KEY equal to PILOT_PASSCODE', () => {
+    const shared = 'shared-key-that-is-long-enough-for-both!!'
+    expect(() => validateProductionConfig({
+      ...validProductionEnv(),
+      PILOT_PASSCODE: shared,
+      INTERNAL_INSPECTION_KEY: shared,
+    })).toThrow('INTERNAL_INSPECTION_KEY')
+  })
+
+  // AI providers — must be exactly openai; typos and unknown values also rejected
   it('rejects fake TRANSCRIPTION_PROVIDER', () => {
     expect(() => validateProductionConfig({
       ...validProductionEnv(),
       TRANSCRIPTION_PROVIDER: 'fake',
     })).toThrow('TRANSCRIPTION_PROVIDER')
+  })
+
+  it('rejects typo/unknown TRANSCRIPTION_PROVIDER (e.g. "opneai")', () => {
+    expect(() => validateProductionConfig({
+      ...validProductionEnv(),
+      TRANSCRIPTION_PROVIDER: 'opneai',
+    })).toThrow('TRANSCRIPTION_PROVIDER')
+  })
+
+  it('rejects missing TRANSCRIPTION_PROVIDER', () => {
+    const env = validProductionEnv()
+    delete env.TRANSCRIPTION_PROVIDER
+    expect(() => validateProductionConfig(env)).toThrow('TRANSCRIPTION_PROVIDER')
   })
 
   it('rejects fake EXTRACTION_PROVIDER', () => {
@@ -203,13 +226,20 @@ describe('validateProductionConfig', () => {
     })).toThrow('EXTRACTION_PROVIDER')
   })
 
-  it('rejects missing TRANSCRIPTION_PROVIDER (defaults to fake)', () => {
-    const env = validProductionEnv()
-    delete env.TRANSCRIPTION_PROVIDER
-    expect(() => validateProductionConfig(env)).toThrow('TRANSCRIPTION_PROVIDER')
+  it('rejects typo/unknown EXTRACTION_PROVIDER (e.g. "real")', () => {
+    expect(() => validateProductionConfig({
+      ...validProductionEnv(),
+      EXTRACTION_PROVIDER: 'real',
+    })).toThrow('EXTRACTION_PROVIDER')
   })
 
-  it('rejects missing OPENAI_API_KEY when OpenAI providers are selected', () => {
+  it('rejects missing EXTRACTION_PROVIDER', () => {
+    const env = validProductionEnv()
+    delete env.EXTRACTION_PROVIDER
+    expect(() => validateProductionConfig(env)).toThrow('EXTRACTION_PROVIDER')
+  })
+
+  it('rejects missing OPENAI_API_KEY', () => {
     const env = validProductionEnv()
     delete env.OPENAI_API_KEY
     expect(() => validateProductionConfig(env)).toThrow('OPENAI_API_KEY')

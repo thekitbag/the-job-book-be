@@ -60,6 +60,8 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv): void {
     errors.push('INTERNAL_INSPECTION_KEY: missing')
   } else if (inspectionKey.length < MIN_INSPECTION_KEY_LEN) {
     errors.push(`INTERNAL_INSPECTION_KEY: must be at least ${MIN_INSPECTION_KEY_LEN} characters`)
+  } else if (passcode && inspectionKey === passcode) {
+    errors.push('INTERNAL_INSPECTION_KEY: must not equal PILOT_PASSCODE')
   }
 
   // FRONTEND_ORIGIN
@@ -97,16 +99,16 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv): void {
     }
   }
 
-  // Transcription / extraction providers
-  const txProvider = env.TRANSCRIPTION_PROVIDER ?? 'fake'
-  if (txProvider === 'fake') errors.push('TRANSCRIPTION_PROVIDER: fake provider not allowed in production')
+  // Transcription / extraction providers — must be explicitly openai; unknown values fall back to fake
+  const txProvider = env.TRANSCRIPTION_PROVIDER
+  if (txProvider !== 'openai') errors.push('TRANSCRIPTION_PROVIDER: must be openai in production')
 
-  const exProvider = env.EXTRACTION_PROVIDER ?? 'fake'
-  if (exProvider === 'fake') errors.push('EXTRACTION_PROVIDER: fake provider not allowed in production')
+  const exProvider = env.EXTRACTION_PROVIDER
+  if (exProvider !== 'openai') errors.push('EXTRACTION_PROVIDER: must be openai in production')
 
   // OpenAI key
-  if ((txProvider === 'openai' || exProvider === 'openai') && !env.OPENAI_API_KEY) {
-    errors.push('OPENAI_API_KEY: missing (required when OpenAI providers are selected)')
+  if (!env.OPENAI_API_KEY) {
+    errors.push('OPENAI_API_KEY: missing')
   }
 
   if (errors.length > 0) {
