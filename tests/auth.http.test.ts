@@ -9,7 +9,7 @@ import { createSessionToken } from '../src/lib/session.js'
 const USER_ID = 'auth-user-1'
 const JOB_ID = 'auth-job-1'
 const TEST_PASSCODE = 'test-passcode-123'
-const TEST_SECRET = 'test-session-secret-long-enough'
+const TEST_SECRET = 'test-session-secret-long-enough!!'
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {

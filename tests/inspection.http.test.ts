@@ -186,11 +186,13 @@ beforeEach(async () => {
   savedEnv = {
     PILOT_USER_ID: process.env.PILOT_USER_ID,
     INTERNAL_INSPECTION_KEY: process.env.INTERNAL_INSPECTION_KEY,
+    SESSION_COOKIE_SECRET: process.env.SESSION_COOKIE_SECRET,
     NODE_ENV: process.env.NODE_ENV,
   }
 
   process.env.PILOT_USER_ID = USER_ID
   process.env.INTERNAL_INSPECTION_KEY = INSPECTION_KEY
+  process.env.SESSION_COOKIE_SECRET = 'test-inspection-session-secret-32chars!!'
   delete process.env.NODE_ENV
 
   const { prisma } = await import('../src/db/client.js')

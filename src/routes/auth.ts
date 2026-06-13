@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify'
 import { prisma } from '../db/client.js'
 import { createSessionToken } from '../lib/session.js'
 import { ErrorCode } from '../types/errors.js'
+import { getSessionCookieSecret } from '../config/production.js'
 
 const COOKIE_NAME = 'pilot_session'
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60 // 30 days
@@ -43,7 +44,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(500).send({ code: 'INTERNAL_ERROR', message: 'Pilot user not found' })
     }
 
-    const secret = process.env.SESSION_COOKIE_SECRET ?? 'dev-secret-change-in-production'
+    const secret = getSessionCookieSecret(process.env)
     const token = createSessionToken(user.id, secret)
     const isProduction = process.env.NODE_ENV === 'production'
 
