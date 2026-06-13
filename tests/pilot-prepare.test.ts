@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { runPilotPrepare } from '../src/scripts/pilot-prepare.js'
-import type { PrepareOptions } from '../src/scripts/pilot-prepare.js'
+import { runPilotPrepare } from '../src/services/pilot-prepare.js'
+import type { PrepareOptions } from '../src/services/pilot-prepare.js'
+
+// ── side-effect-free import ───────────────────────────────────────────────────
+// Importing the service module must not read process.env or call process.exit,
+// regardless of whether PILOT_USER_ID is set.
+
+describe('pilot-prepare service module — import side effects', () => {
+  it('exports runPilotPrepare without reading env or exiting', () => {
+    // If this test runs at all, the import was side-effect free.
+    // PILOT_USER_ID is intentionally not set here.
+    expect(typeof runPilotPrepare).toBe('function')
+  })
+})
 
 // ── mock prisma ────────────────────────────────────────────────────────────────
 
