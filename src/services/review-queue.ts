@@ -273,13 +273,9 @@ async function verifyJobOwnership(jobId: string, userId: string) {
   return job
 }
 
-// ── GET /api/jobs/:jobId/review-queue ─────────────────────────────────────────
+// ── Shared queue generation (used by both the review-queue route and inspection) ──
 
-export async function getReviewQueue(jobId: string, userId: string) {
-  await verifyJobOwnership(jobId, userId)
-
-  const now = new Date()
-
+export async function buildFreshQueueSections(jobId: string, now: Date) {
   const facts = await prisma.candidateFact.findMany({
     where: { jobId, status: { in: ['DRAFT', 'UNCLEAR'] } },
     include: {
@@ -327,11 +323,6 @@ export async function getReviewQueue(jobId: string, userId: string) {
     orderBy: { createdAt: 'asc' },
   })
 
-  const memoryItems = await prisma.memoryItem.findMany({
-    where: { jobId },
-    orderBy: { createdAt: 'desc' },
-  })
-
   const sections = SECTION_KEYS.map((key) => ({
     key,
     label: SECTION_LABELS[key],
@@ -348,20 +339,44 @@ export async function getReviewQueue(jobId: string, userId: string) {
         confidenceLabel: item.confidenceLabel,
         uncertaintyFlags: item.uncertaintyFlags,
         sourceCandidateFactIds: item.sourceCandidateFactIds,
-        sourceContext: item.sourceCandidateFactIds
-          .flatMap((id) => {
-            const f = factMap.get(id)
-            if (!f) return []
-            return [{
-              candidateFactId: f.id,
-              noteId: f.sourceNoteId,
-              transcriptId: f.sourceTranscriptId,
-              capturedAt: f.sourceNote.capturedAt,
-              transcriptText: f.transcript.text ?? null,
-            }]
-          }),
       })),
   }))
+
+  return { sections, factMap }
+}
+
+// ── GET /api/jobs/:jobId/review-queue ─────────────────────────────────────────
+
+export async function getReviewQueue(jobId: string, userId: string) {
+  await verifyJobOwnership(jobId, userId)
+
+  const now = new Date()
+
+  const { sections: baseSections, factMap } = await buildFreshQueueSections(jobId, now)
+
+  // Add sourceContext to each item using the factMap (review-queue-specific enrichment)
+  const sections = baseSections.map((section) => ({
+    ...section,
+    items: section.items.map((item) => ({
+      ...item,
+      sourceContext: item.sourceCandidateFactIds.flatMap((id) => {
+        const f = factMap.get(id)
+        if (!f) return []
+        return [{
+          candidateFactId: f.id,
+          noteId: f.sourceNoteId,
+          transcriptId: f.sourceTranscriptId,
+          capturedAt: f.sourceNote.capturedAt,
+          transcriptText: f.transcript.text ?? null,
+        }]
+      }),
+    })),
+  }))
+
+  const memoryItems = await prisma.memoryItem.findMany({
+    where: { jobId },
+    orderBy: { createdAt: 'desc' },
+  })
 
   const alreadyRemembered = memoryItems.map((m) => ({
     memoryItemId: m.id,
