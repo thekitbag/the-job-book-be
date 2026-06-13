@@ -2,6 +2,7 @@ import fp from 'fastify-plugin'
 import type { FastifyPluginAsync } from 'fastify'
 import { prisma } from '../db/client.js'
 import { verifySessionToken } from '../lib/session.js'
+import { getSessionCookieSecret } from '../config/production.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -19,7 +20,7 @@ const authPlugin: FastifyPluginAsync = async (fastify) => {
     // Auth endpoints handle their own auth
     if (request.url.startsWith('/api/auth/')) return
 
-    const secret = process.env.SESSION_COOKIE_SECRET ?? 'dev-secret-change-in-production'
+    const secret = getSessionCookieSecret(process.env)
 
     // 1. Session cookie — primary auth (dev + production)
     const sessionCookie = request.cookies?.[COOKIE_NAME]
