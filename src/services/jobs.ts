@@ -1,8 +1,6 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 
-const ALLOWED_JOB_TYPES = new Set(['garden_room', 'extension', 'other'])
-
 const JOB_SELECT = {
   id: true,
   title: true,
@@ -46,12 +44,14 @@ export async function getCurrentJob(userId: string) {
 
 export async function listJobs(userId: string) {
   const jobs = await prisma.job.findMany({
-    where: { ownerUserId: userId },
+    where: { ownerUserId: userId, status: 'ACTIVE' },
     select: JOB_SELECT,
-    orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+    orderBy: { updatedAt: 'desc' },
   })
   return jobs.map(normalizeJob)
 }
+
+export const ALLOWED_JOB_TYPES = new Set(['garden_room', 'extension', 'other'])
 
 export async function getJob(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({
