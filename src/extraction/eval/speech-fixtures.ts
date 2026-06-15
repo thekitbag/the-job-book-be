@@ -160,6 +160,30 @@ export const SPEECH_FIXTURES: SpeechFixture[] = [
   },
 
   {
+    id: 'sup-jewson-duesens',
+    title: 'Jewson misheard as "Duesen\'s"',
+    intendedUtterance: 'Ordered twenty bags of sand from Jewson for Monday.',
+    transcriptText: "Ordered twenty bags of sand from Duesen's for Monday.",
+    domainTerms: ['Jewson'],
+    jobContext: GARDEN_ROOM,
+    tags: ['supplier', 'mishear', 'ordered_material'],
+    credibilityRisk: 'high',
+    expected: [
+      {
+        factType: 'ordered_material',
+        materialName: 'sand',
+        quantity: '20',
+        unit: 'bags',
+        supplierName: '',      // "Duesen's" is not a known supplier — must not be stored confidently
+        deliveryTiming: 'Monday',
+        confidenceLabel: 'medium',
+        uncertaintyFlags: ['supplier_uncertain'],
+      },
+    ] as ExpectedFact[],
+    notes: '"Duesen\'s" sounds plausible as a business name but is not a known supplier. Treated as a Jewson mishear — must not be stored as a confident supplier name.',
+  },
+
+  {
     id: 'sup-travis-traffic-perkins',
     title: 'Travis Perkins misheard as "traffic Perkins"',
     intendedUtterance: 'Picked up battens from Travis Perkins yesterday.',
