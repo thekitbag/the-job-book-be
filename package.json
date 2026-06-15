@@ -14,7 +14,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pilot:prepare": "tsx src/scripts/pilot-prepare.ts"
+    "pilot:prepare": "tsx src/scripts/pilot-prepare.ts",
+    "eval:extraction": "tsx src/extraction/eval/run.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1064.0",
