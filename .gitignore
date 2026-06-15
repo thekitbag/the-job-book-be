@@ -4,3 +4,4 @@ dist/
 .env.test
 audio-store/
 *.local
+reports/extraction-eval/*.md
