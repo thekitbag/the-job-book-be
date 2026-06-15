@@ -42,16 +42,21 @@ function computeSafeOutcome(
       reasons.push(`Confidence too high: expected '${exp.confidenceLabel}' but got 'high'`)
     }
 
-    // Supplier/material expected to be absent (empty string '') but set with high confidence
+    // Any high-confidence mismatch on a domain name field is unsafe.
+    // A wrong supplier/material stored with high confidence is a credibility risk
+    // regardless of whether the expected value was empty or a different known name.
     for (const diff of fc.fieldDiffs) {
       if (
         (diff.field === 'supplierName' || diff.field === 'materialName') &&
-        diff.expected === '' &&
         diff.actual &&
         diff.actual.length > 0 &&
         act.confidenceLabel === 'high'
       ) {
-        reasons.push(`Nonsense ${diff.field} captured with high confidence: "${diff.actual}"`)
+        if (!diff.expected) {
+          reasons.push(`Nonsense ${diff.field} captured with high confidence: "${diff.actual}"`)
+        } else {
+          reasons.push(`High-confidence ${diff.field} mismatch: expected "${diff.expected}" but got "${diff.actual}"`)
+        }
       }
     }
 

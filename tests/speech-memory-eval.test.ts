@@ -222,6 +222,49 @@ describe('compareSpeechFixture — nonsense token captured with high confidence'
     expect(result.safeOutcome).toBe(false)
     expect(result.unsafeReasons.some((r) => r.includes('Invented high-confidence'))).toBe(true)
   })
+
+  it('marks unsafe when expected supplier is non-empty but actual returns a different high-confidence supplier', () => {
+    // Regression: previously only flagged when expected === '' (absent).
+    // A wrong high-confidence supplier is a credibility risk regardless of what was expected.
+    const fixture = SPEECH_FIXTURES.find((f) => f.id === 'sup-jewson-clean')!
+    // fixture expects supplierName: 'Jewson' with high confidence
+    const actual = [
+      makeFact({
+        factType: 'ordered_material',
+        materialName: 'plasterboard',
+        quantity: '12',
+        unit: 'sheets',
+        supplierName: 'screw fits',   // wrong supplier, high confidence
+        deliveryTiming: 'tomorrow morning',
+        confidenceLabel: 'high',
+        uncertaintyFlags: [],
+      }),
+    ]
+    const result = compareSpeechFixture(fixture, actual)
+    expect(result.safeOutcome).toBe(false)
+    expect(result.unsafeReasons.some((r) => r.includes('supplierName'))).toBe(true)
+  })
+
+  it('marks unsafe when expected material is non-empty but actual returns a different high-confidence material', () => {
+    // Regression: previously only flagged when expected === '' (absent).
+    // A wrong high-confidence material name is a credibility risk regardless of what was expected.
+    const fixture = SPEECH_FIXTURES.find((f) => f.id === 'mat-osb-clean')!
+    // fixture expects materialName: 'OSB' with high confidence
+    const actual = [
+      makeFact({
+        factType: 'used_material',
+        materialName: 'USB boards',   // wrong material, high confidence
+        quantity: '6',
+        unit: 'boards',
+        locationOrUse: 'back wall',
+        confidenceLabel: 'high',
+        uncertaintyFlags: [],
+      }),
+    ]
+    const result = compareSpeechFixture(fixture, actual)
+    expect(result.safeOutcome).toBe(false)
+    expect(result.unsafeReasons.some((r) => r.includes('materialName'))).toBe(true)
+  })
 })
 
 // ── low/medium confidence + uncertainty flags: safe ───────────────────────────
