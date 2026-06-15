@@ -1,5 +1,8 @@
 /**
- * Extraction evaluation harness CLI
+ * Extraction evaluation harness CLI entry point.
+ *
+ * This file is CLI-only and calls main() unconditionally.
+ * All testable evaluation logic lives in evaluate.ts — import from there in tests.
  *
  * Usage:
  *   npm run eval:extraction
@@ -7,10 +10,8 @@
  *   npm run eval:extraction -- --provider openai
  *   npm run eval:extraction -- --out reports/extraction-eval/latest.md
  *
- * CI/tests use --provider fake (offline, no OPENAI_API_KEY required).
- * OpenAI mode requires OPENAI_API_KEY in env and is manually invoked.
- *
- * This file is a CLI entry point. All testable logic is in compare.ts / report.ts.
+ * Default provider is offline-safe fake. OpenAI mode requires OPENAI_API_KEY
+ * and is manually invoked. CI must not require OPENAI_API_KEY.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs'
@@ -18,39 +19,8 @@ import { dirname } from 'node:path'
 import type { ExtractionProvider } from '../types.js'
 import { FakeExtractionProvider } from '../fake.js'
 import { GOLDEN_FIXTURES } from './fixtures.js'
-import { compareFixture } from './compare.js'
-import type { FixtureComparison } from './compare.js'
+import { runEvaluation } from './evaluate.js'
 import { generateMarkdownReport } from './report.js'
-
-export async function runEvaluation(
-  fixtures: typeof GOLDEN_FIXTURES,
-  provider: ExtractionProvider,
-): Promise<FixtureComparison[]> {
-  const results: FixtureComparison[] = []
-
-  for (const fixture of fixtures) {
-    const input = {
-      transcriptId: `eval-tx-${fixture.id}`,
-      noteId: `eval-note-${fixture.id}`,
-      jobId: `eval-job-${fixture.id}`,
-      transcriptText: fixture.transcriptText,
-      jobContext: fixture.jobContext,
-    }
-
-    let actual: import('../types.js').CandidateFactDraft[] = []
-    let providerError: string | undefined
-    try {
-      const result = await provider.extractFacts(input)
-      actual = result.facts
-    } catch (err) {
-      providerError = err instanceof Error ? err.message : String(err)
-    }
-
-    results.push(compareFixture(fixture, actual, providerError))
-  }
-
-  return results
-}
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
@@ -63,7 +33,7 @@ async function main(): Promise<void> {
 
   let provider: ExtractionProvider
   let model: string
-  let schemaVersion: string
+  const schemaVersion = 'v1'
 
   if (providerName === 'openai') {
     const apiKey = process.env.OPENAI_API_KEY
@@ -75,12 +45,10 @@ async function main(): Promise<void> {
     const p = new OpenAIExtractionProvider(apiKey)
     provider = p
     model = p.model
-    schemaVersion = 'v1'
   } else {
     const p = new FakeExtractionProvider()
     provider = p
     model = p.model
-    schemaVersion = 'v1'
   }
 
   console.log(`\nExtraction evaluation — provider: ${providerName}, fixtures: ${GOLDEN_FIXTURES.length}`)
@@ -91,15 +59,13 @@ async function main(): Promise<void> {
   const needsReview = results.filter((r) => r.status === 'needs_review').length
   const fail = results.filter((r) => r.status === 'fail').length
 
-  const meta = {
+  const report = generateMarkdownReport(results, {
     providerName,
     providerModel: model,
     schemaVersion,
     timestamp: new Date().toISOString(),
     fixtureSetName: 'extraction-golden',
-  }
-
-  const report = generateMarkdownReport(results, meta)
+  })
 
   mkdirSync(dirname(outPath), { recursive: true })
   writeFileSync(outPath, report, 'utf-8')

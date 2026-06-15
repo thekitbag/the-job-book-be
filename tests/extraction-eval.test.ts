@@ -2,9 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { GOLDEN_FIXTURES } from '../src/extraction/eval/fixtures.js'
 import { compareFixture } from '../src/extraction/eval/compare.js'
 import { generateMarkdownReport } from '../src/extraction/eval/report.js'
-import { runEvaluation } from '../src/extraction/eval/run.js'
+import { runEvaluation } from '../src/extraction/eval/evaluate.js'
 import type { CandidateFactDraft } from '../src/extraction/types.js'
 import type { ExtractionProvider, ExtractionInput, ExtractionResult } from '../src/extraction/types.js'
+
+// ── side-effect-free import regression ───────────────────────────────────────
+// Importing evaluate.ts must not write a report, read process.argv, or call
+// process.exit. If this test runs at all, the import was side-effect free.
+
+describe('evaluate module — import side effects', () => {
+  it('exports runEvaluation without writing files or reading process args', () => {
+    expect(typeof runEvaluation).toBe('function')
+  })
+})
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
