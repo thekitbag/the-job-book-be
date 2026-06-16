@@ -329,6 +329,46 @@ describe('compareSpeechFixture — uncertain output is treated as safer', () => 
   })
 })
 
+// ── guarded output is safe enough for review ─────────────────────────────────
+
+describe('compareSpeechFixture — guarded output treated as safe', () => {
+  it("marks safe when Duesen's fixture receives guarded output (Jewson + medium + supplier_uncertain)", () => {
+    // Simulates what the pilot correction guard produces before fact persistence:
+    // "Duesen's" (high) → "Jewson" (medium, supplier_uncertain)
+    const fixture = SPEECH_FIXTURES.find((f) => f.id === 'sup-jewson-duesens')!
+    const guardedOutput = [
+      makeFact({
+        factType: 'ordered_material',
+        materialName: 'sand',
+        quantity: '20',
+        unit: 'bags',
+        supplierName: 'Jewson',           // corrected from "Duesen's" by the guard
+        deliveryTiming: 'Monday',
+        confidenceLabel: 'medium',        // lowered by the guard
+        uncertaintyFlags: ['supplier_uncertain'],  // added by the guard
+      }),
+    ]
+    const result = compareSpeechFixture(fixture, guardedOutput)
+    // Exact field match on supplierName may differ from expected '' but outcome is safe:
+    // no high-confidence mismatch, no missing uncertainty flags
+    expect(result.safeOutcome).toBe(true)
+  })
+
+  it('marks safe when USB boards fixture receives guarded output (OSB + medium + material_uncertain)', () => {
+    const fixture = SPEECH_FIXTURES.find((f) => f.id === 'mat-osb-usb')!
+    const guardedOutput = [
+      makeFact({
+        factType: 'unclear',
+        summary: 'Material likely OSB but transcript said USB boards — corrected with uncertainty',
+        confidenceLabel: 'low',
+        uncertaintyFlags: ['material_uncertain'],
+      }),
+    ]
+    const result = compareSpeechFixture(fixture, guardedOutput)
+    expect(result.safeOutcome).toBe(true)
+  })
+})
+
 // ── credibility risk field ────────────────────────────────────────────────────
 
 describe('compareSpeechFixture — credibility risk from fixture', () => {

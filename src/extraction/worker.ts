@@ -1,5 +1,6 @@
 import { prisma } from '../db/client.js'
 import type { ExtractionProvider } from './types.js'
+import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -46,11 +47,20 @@ export async function runExtraction(
       },
     })
 
+    const guardedFacts = applyPilotCorrectionGuard({
+      transcriptText: transcript.text,
+      jobContext: {
+        title: transcript.note.job.title,
+        jobType: transcript.note.job.jobType,
+      },
+      facts: result.facts,
+    })
+
     await prisma.$transaction(async (tx) => {
       // Delete any facts from a prior partial run before re-creating them atomically
       await tx.candidateFact.deleteMany({ where: { sourceTranscriptId: transcriptId } })
 
-      for (const fact of result.facts) {
+      for (const fact of guardedFacts) {
         const isUnclear = fact.factType === 'unclear'
         await tx.candidateFact.create({
           data: {
