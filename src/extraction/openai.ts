@@ -1,9 +1,10 @@
 import type { CandidateFactDraft, ExtractionInput, ExtractionProvider, ExtractionResult } from './types.js'
+import { PILOT_DOMAIN_CONTEXT } from './pilot-domain-context.js'
 
 const SCHEMA_VERSION = 'v1'
 const MODEL = 'gpt-4o'
 
-const SYSTEM_PROMPT = `You are a job-memory extraction assistant for a UK building contractor.
+const BASE_PROMPT = `You are a job-memory extraction assistant for a UK building contractor.
 Extract structured facts from the transcript of a voice note recorded on site.
 
 Return a JSON object with a single key "facts" whose value is an array of candidate fact objects. Each fact object must have exactly these fields:
@@ -26,6 +27,8 @@ Rules:
 - Do not infer quantities, suppliers, dates, or other details not stated in the transcript
 - Return { "facts": [] } if the transcript contains no site-relevant job facts
 - Return only a valid JSON object with the "facts" key, no surrounding text or markdown`
+
+export const SYSTEM_PROMPT = `${BASE_PROMPT}\n\n${PILOT_DOMAIN_CONTEXT}`
 
 export class OpenAIExtractionProvider implements ExtractionProvider {
   readonly name = 'openai'
