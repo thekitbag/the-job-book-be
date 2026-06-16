@@ -18,7 +18,7 @@ Return a JSON object with a single key "facts" whose value is an array of candid
 - locationOrUse: string or null (where material was used or delivered to)
 - confidenceLabel: "high" | "medium" | "low"
 - confidenceReason: short explanation of why this confidence level was chosen
-- uncertaintyFlags: array of strings, e.g. ["approximate_quantity", "supplier_unconfirmed", "date_uncertain"]
+- uncertaintyFlags: array of strings, e.g. ["approximate_quantity", "supplier_uncertain", "material_uncertain", "date_uncertain"]
 
 Rules:
 - Split mixed content into separate facts — one object per distinct item

@@ -54,6 +54,10 @@ describe('OpenAI extraction prompt — uncertainty rules', () => {
   it('instructs model to add material_uncertain flag', () => {
     expect(SYSTEM_PROMPT).toContain('material_uncertain')
   })
+
+  it('does not use the old supplier_unconfirmed flag name — vocabulary must match the guard/harness', () => {
+    expect(SYSTEM_PROMPT).not.toContain('supplier_unconfirmed')
+  })
 })
 
 describe('OpenAI extraction prompt — weak-context guardrail', () => {
