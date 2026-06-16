@@ -254,3 +254,94 @@ describe('runExtraction — guard conditions', () => {
     expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
   })
 })
+
+// ── pilot correction guard integration ────────────────────────────────────────
+
+describe('runExtraction — pilot correction guard', () => {
+  it("persists Jewson (guarded) when provider returns Duesen's with high confidence", async () => {
+    const { prisma } = await import('../src/db/client.js')
+    // Transcript with strong order context so the guard can correct the mishear
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: "Ordered twenty bags of sand from Duesen's for Monday." }),
+    )
+
+    const duesensProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: "Ordered twenty bags of sand from Duesen's for Monday.",
+          materialName: 'sand',
+          quantity: '20',
+          unit: 'bags',
+          supplierName: "Duesen's",
+          deliveryTiming: 'Monday',
+          confidenceLabel: 'high' as const,
+          confidenceReason: "Explicit in transcript",
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, duesensProvider)
+
+    const calls = vi.mocked(prisma.candidateFact.create as any).mock.calls
+    expect(calls).toHaveLength(1)
+    const data = calls[0][0].data
+    // Guard should have corrected Duesen's → Jewson at medium confidence
+    expect(data.supplierName).toBe('Jewson')
+    expect(data.confidenceLabel).toBe('MEDIUM')
+    expect(data.uncertaintyFlags).toContain('supplier_uncertain')
+  })
+
+  it('raw transcript text is not modified by the guard', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const originalText = "Ordered twenty bags of sand from Duesen's for Monday."
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: originalText }),
+    )
+
+    const duesensProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{ factType: 'ordered_material' as const, summary: 'test', supplierName: "Duesen's", confidenceLabel: 'high' as const, confidenceReason: 'test', uncertaintyFlags: [] }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, duesensProvider)
+
+    // Transcript text update calls must not contain altered text
+    const txUpdates = vi.mocked(prisma.transcript.update as any).mock.calls.map((c: any) => c[0].data)
+    for (const update of txUpdates) {
+      if ('text' in update) {
+        expect(update.text).toBe(originalText)
+      }
+    }
+    // candidateFact rows still link to original transcript
+    const factCall = vi.mocked(prisma.candidateFact.create as any).mock.calls[0]
+    expect(factCall[0].data.sourceTranscriptId).toBe(TRANSCRIPT_ID)
+  })
+
+  it('extraction failure behaviour is unchanged when provider throws', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: "Ordered bags of sand from Duesen's." }),
+    )
+
+    const failingProvider = {
+      name: 'stub-fail',
+      model: 'stub-v1',
+      extractFacts: async () => { throw new Error('provider down') },
+    }
+
+    await runExtraction(TRANSCRIPT_ID, failingProvider)
+
+    const txUpdates = vi.mocked(prisma.transcript.update as any).mock.calls.map((c: any) => c[0].data)
+    expect(txUpdates).toContainEqual(expect.objectContaining({ extractionStatus: 'FAILED' }))
+    expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
+  })
+})
