@@ -614,4 +614,32 @@ describe('GET /api/jobs/:jobId/memory-view — summarySections consolidation', (
     expect(ordered?.items[0].costLabel).toBeNull()
     expect(ordered?.items[0].totalCostLabel).toBeNull()
   })
+
+  it('keeps rows separate when materialName is null even if unit matches', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: null,
+        quantity: '3',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: null,
+        quantity: '5',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(2)
+  })
 })

@@ -73,7 +73,7 @@ function consolidateSummaryRows(rows: SummaryRow[]): SummaryRow[] {
       (r) => r.quantity != null && SUMMARY_STRICT_DECIMAL_RE.test(r.quantity),
     )
     const noUncertainty = group.every((r) => r.uncertaintyFlags.length === 0)
-    if (allNumeric && noUncertainty) {
+    if (allNumeric && noUncertainty && group[0].materialName !== null) {
       const sumQty = group.reduce((acc, r) => acc + parseFloat(r.quantity!), 0)
       const commonSupplier =
         group.every((r) => r.supplierName === group[0].supplierName)
