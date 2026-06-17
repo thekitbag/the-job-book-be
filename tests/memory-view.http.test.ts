@@ -360,3 +360,286 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
     expect(body.job.jobType).toBe('garden_room')
   })
 })
+
+// ── Cost fields and summarySections ──────────────────────────────────────────
+
+describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+
+  it('includes cost fields in section items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].costAmount).toBe('5')
+    expect(ordered?.items[0].costCurrency).toBe('GBP')
+    expect(ordered?.items[0].costQualifier).toBe('each')
+    expect(ordered?.items[0].totalCostAmount).toBe('40')
+  })
+
+  it('includes summarySections with correct keys and labels', async () => {
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; label: string; items: unknown[] }> }>()
+    expect(body.summarySections).toHaveLength(3)
+    expect(body.summarySections[0]).toMatchObject({ key: 'ordered_materials', label: 'Bought / ordered' })
+    expect(body.summarySections[1]).toMatchObject({ key: 'used_materials', label: 'Used' })
+    expect(body.summarySections[2]).toMatchObject({ key: 'leftovers', label: 'Leftovers' })
+  })
+
+  it('summarySections item has costLabel, totalCostLabel, memoryItemIds, and uncertaintyFlags', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        costAmount: '5',
+        costCurrency: 'GBP',
+        costQualifier: 'each',
+        totalCostAmount: '40',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [] }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(1)
+    expect(ordered?.items[0].costLabel).toBe('£5 each')
+    expect(ordered?.items[0].totalCostLabel).toBe('£40 total')
+    expect(ordered?.items[0].memoryItemIds).toEqual([MEMORY_ID])
+    expect(ordered?.items[0].uncertaintyFlags).toEqual([])
+  })
+
+  it('summarySections costLabel and totalCostLabel are null when no cost stored', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].costLabel).toBeNull()
+    expect(ordered?.items[0].totalCostLabel).toBeNull()
+  })
+
+  it('section items include uncertaintyFlags from sourceFact', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ sourceFact: makeSourceFact({ uncertaintyFlags: ['material_uncertain'] }) }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].uncertaintyFlags).toEqual(['material_uncertain'])
+  })
+
+  it('section items have empty uncertaintyFlags when no sourceFact', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ sourceCandidateFactId: null, isManual: true, sourceFact: null }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].uncertaintyFlags).toEqual([])
+  })
+})
+
+// ── summarySections consolidation ────────────────────────────────────────────
+
+describe('GET /api/jobs/:jobId/memory-view — summarySections consolidation', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+  const MEMORY_ID_2 = 'mv-memory-2'
+
+  it('consolidates two compatible rows of same materialName + unit into one row', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '8',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(1)
+    expect(ordered?.items[0].quantity).toBe('12')
+    expect(ordered?.items[0].memoryItemIds).toEqual(expect.arrayContaining([MEMORY_ID, MEMORY_ID_2]))
+    expect((ordered?.items[0].memoryItemIds as string[]).length).toBe(2)
+  })
+
+  it('keeps rows separate when units differ (bags vs sheets)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'plasterboard',
+        quantity: '8',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'plasterboard',
+        quantity: '4',
+        unit: 'sheets',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(2)
+  })
+
+  it('keeps rows separate when any item has uncertainty flags', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '8',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: ['approximate_quantity'], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(2)
+  })
+
+  it('keeps rows separate when any quantity is non-numeric', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: 'some',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(2)
+  })
+
+  it('merged row nulls out cost labels (items may have different unit costs)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '8',
+        unit: 'bags',
+        costAmount: '5',
+        costCurrency: 'GBP',
+        costQualifier: 'each',
+        totalCostAmount: '40',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: 'bags',
+        costAmount: '6',
+        costCurrency: 'GBP',
+        costQualifier: 'each',
+        totalCostAmount: '24',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(1)
+    expect(ordered?.items[0].costLabel).toBeNull()
+    expect(ordered?.items[0].totalCostLabel).toBeNull()
+  })
+
+  it('keeps rows separate when materialName is null even if unit matches', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: null,
+        quantity: '3',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: null,
+        quantity: '5',
+        unit: 'bags',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [], factType: 'ORDERED_MATERIAL' }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(2)
+  })
+})

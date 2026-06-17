@@ -195,6 +195,10 @@ export async function getJobInspection(jobId: string, userId: string) {
       supplierName: m.supplierName,
       deliveryTiming: m.deliveryTiming,
       locationOrUse: m.locationOrUse,
+      costAmount: m.costAmount,
+      costCurrency: m.costCurrency,
+      costQualifier: m.costQualifier,
+      totalCostAmount: m.totalCostAmount,
       sourceCandidateFactId: m.sourceCandidateFactId,
       reviewDecisionId: m.reviewDecisionId,
       createdAt: m.createdAt,
@@ -238,6 +242,10 @@ function formatNote(
       supplierName: string | null
       deliveryTiming: string | null
       locationOrUse: string | null
+      costAmount: string | null
+      costCurrency: string | null
+      costQualifier: string | null
+      totalCostAmount: string | null
       confidenceLabel: string
       uncertaintyFlags: string[]
       sourceTranscriptId: string
@@ -288,6 +296,10 @@ function formatNote(
         supplierName: f.supplierName,
         deliveryTiming: f.deliveryTiming,
         locationOrUse: f.locationOrUse,
+        costAmount: f.costAmount,
+        costCurrency: f.costCurrency,
+        costQualifier: f.costQualifier,
+        totalCostAmount: f.totalCostAmount,
         confidenceLabel: f.confidenceLabel.toLowerCase(),
         uncertaintyFlags: f.uncertaintyFlags,
         sourceTranscriptId: f.sourceTranscriptId,

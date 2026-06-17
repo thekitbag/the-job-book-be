@@ -843,3 +843,129 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(res.statusCode).toBe(403)
   })
 })
+
+// ── Cost field validation and persistence ─────────────────────────────────────
+
+describe('POST /api/jobs/:jobId/review-queue-decisions — cost field validation', () => {
+  it('returns 400 INVALID_FIELD when corrected.costAmount is not a decimal string', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID,
+        action: 'correct',
+        corrected: { memoryType: 'ordered_material', summary: 'Some order', costAmount: 'abc' },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+  })
+
+  it('returns 400 INVALID_FIELD when corrected.totalCostAmount is not a decimal string', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID,
+        action: 'correct',
+        corrected: { memoryType: 'ordered_material', summary: 'Some order', totalCostAmount: '£40' },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+  })
+
+  it('returns 400 INVALID_FIELD when corrected.costQualifier is not a valid qualifier', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID,
+        action: 'correct',
+        corrected: { memoryType: 'ordered_material', summary: 'Some order', costQualifier: 'weekly' },
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+  })
+
+  it('confirm: persists cost fields from proposedMemory to memory item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({
+        sectionKey: 'ordered_materials',
+        proposedMemory: {
+          memoryType: 'ordered_material',
+          summary: 'Ordered 8 bags of hardcore from Jewson at £5 each',
+          materialName: 'hardcore',
+          quantity: '8',
+          unit: 'bags',
+          supplierName: 'Jewson',
+          deliveryTiming: null,
+          locationOrUse: null,
+          costAmount: '5',
+          costCurrency: 'GBP',
+          costQualifier: 'each',
+          totalCostAmount: '40',
+        },
+      }),
+    )
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          costAmount: '5',
+          costCurrency: 'GBP',
+          costQualifier: 'each',
+          totalCostAmount: '40',
+        }),
+      }),
+    )
+  })
+
+  it('correct: persists cost fields from corrected body to memory item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeQueueItem())
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID,
+        action: 'correct',
+        corrected: {
+          memoryType: 'ordered_material',
+          summary: 'Ordered 8 bags of hardcore at £5 each',
+          costAmount: '5',
+          costCurrency: 'GBP',
+          costQualifier: 'each',
+          totalCostAmount: '40',
+        },
+      },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          costAmount: '5',
+          costCurrency: 'GBP',
+          costQualifier: 'each',
+          totalCostAmount: '40',
+        }),
+      }),
+    )
+  })
+})

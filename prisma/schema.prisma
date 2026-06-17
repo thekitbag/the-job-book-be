@@ -192,6 +192,10 @@ model CandidateFact {
   confidenceLabel         ConfidenceLabel
   confidenceReason        String
   uncertaintyFlags        String[]
+  costAmount              String?
+  costCurrency            String?
+  costQualifier           String?
+  totalCostAmount         String?
   extractionProvider      String?
   extractionModel         String?
   extractionSchemaVersion String?
@@ -251,6 +255,10 @@ model MemoryItem {
   supplierName          String?
   deliveryTiming        String?
   locationOrUse         String?
+  costAmount            String?
+  costCurrency          String?
+  costQualifier         String?
+  totalCostAmount       String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 

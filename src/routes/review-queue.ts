@@ -2,6 +2,13 @@ import type { FastifyPluginAsync } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
 import { getReviewQueue, submitQueueDecision, VALID_MEMORY_TYPES } from '../services/review-queue.js'
 
+// Decimal string: optional digits, optional dot, optional further digits; not empty.
+const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
+
+function isValidDecimalString(v: unknown): boolean {
+  return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
+}
+
 const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /api/jobs/:jobId/review-queue
   fastify.get<{ Params: { jobId: string } }>(
@@ -35,6 +42,10 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         supplierName?: string | null
         deliveryTiming?: string | null
         locationOrUse?: string | null
+        costAmount?: string | null
+        costCurrency?: string | null
+        costQualifier?: string | null
+        totalCostAmount?: string | null
       }
       reason?: string
     }
@@ -61,6 +72,17 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
           code: ErrorCode.INVALID_FIELD,
           message: 'corrected.memoryType must be a valid non-unclear memory type',
         })
+      }
+      const c = body.corrected
+      if (c.costAmount != null && !isValidDecimalString(c.costAmount)) {
+        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costAmount must be a decimal string' })
+      }
+      if (c.totalCostAmount != null && !isValidDecimalString(c.totalCostAmount)) {
+        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.totalCostAmount must be a decimal string' })
+      }
+      const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown'])
+      if (c.costQualifier != null && !VALID_QUALIFIERS.has(c.costQualifier)) {
+        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costQualifier must be each, total, approx, or unknown' })
       }
     }
 

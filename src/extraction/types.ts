@@ -9,6 +9,8 @@ export type FactType =
 
 export type ConfidenceLabel = 'high' | 'medium' | 'low'
 
+export type CostQualifier = 'each' | 'total' | 'approx' | 'unknown'
+
 export interface CandidateFactDraft {
   factType: FactType
   summary: string
@@ -18,6 +20,10 @@ export interface CandidateFactDraft {
   supplierName?: string
   deliveryTiming?: string
   locationOrUse?: string
+  costAmount?: string
+  costCurrency?: string
+  costQualifier?: CostQualifier
+  totalCostAmount?: string
   confidenceLabel: ConfidenceLabel
   confidenceReason: string
   uncertaintyFlags: string[]

@@ -16,15 +16,21 @@ Return a JSON object with a single key "facts" whose value is an array of candid
 - supplierName: string or null
 - deliveryTiming: string or null
 - locationOrUse: string or null (where material was used or delivered to)
+- costAmount: string or null (stated cost value as decimal string without currency symbol, e.g. "5", "5.50", "40")
+- costCurrency: string or null ("GBP" when pounds, £, or quid is used; null if unclear)
+- costQualifier: "each" | "total" | "approx" | "unknown" | null ("each" for per-unit cost, "total" for overall cost, "approx" for uncertain cost)
+- totalCostAmount: string or null (stated or safely derivable total cost as decimal string; only set when total is explicit or quantity × unit-cost is unambiguous)
 - confidenceLabel: "high" | "medium" | "low"
 - confidenceReason: short explanation of why this confidence level was chosen
-- uncertaintyFlags: array of strings, e.g. ["approximate_quantity", "supplier_uncertain", "material_uncertain", "date_uncertain"]
+- uncertaintyFlags: array of strings, e.g. ["approximate_quantity", "supplier_uncertain", "material_uncertain", "date_uncertain", "cost_uncertain"]
 
 Rules:
 - Split mixed content into separate facts — one object per distinct item
 - Use factType "unclear" for ambiguous statements where the fact type cannot be determined
 - Use low confidence and add uncertaintyFlags for approximate language: "probably", "about", "I think", "maybe", "roughly"
 - Do not infer quantities, suppliers, dates, or other details not stated in the transcript
+- For cost: only extract costAmount when a price is clearly stated; add "cost_uncertain" when cost language is approximate or ambiguous
+- Do not store money as floating point — use decimal strings (e.g. "5.50" not 5.5)
 - Return { "facts": [] } if the transcript contains no site-relevant job facts
 - Return only a valid JSON object with the "facts" key, no surrounding text or markdown`
 

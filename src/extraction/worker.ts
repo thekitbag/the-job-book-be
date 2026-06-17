@@ -1,5 +1,5 @@
 import { prisma } from '../db/client.js'
-import type { ExtractionProvider } from './types.js'
+import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
 
 function toDbFactType(ft: string): string {
@@ -8,6 +8,28 @@ function toDbFactType(ft: string): string {
 
 function toDbConfidence(cl: string): string {
   return cl.toUpperCase()
+}
+
+// Only strings that are purely numeric (no units, no approximations, no partial text).
+const STRICT_DECIMAL_RE = /^\d+(\.\d+)?$/
+
+function strictParsePositive(s: string | null | undefined): number | null {
+  if (!s || !STRICT_DECIMAL_RE.test(s)) return null
+  const n = parseFloat(s)
+  return n > 0 ? n : null
+}
+
+// Derive totalCostAmount only when qualifier is "each" and both quantity and
+// costAmount are unambiguous numerics. Returns undefined (not null) to leave
+// the field unchanged when derivation is not safe.
+function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
+  if (fact.totalCostAmount) return fact.totalCostAmount
+  if (fact.costQualifier !== 'each') return undefined
+  const qty = strictParsePositive(fact.quantity)
+  const cost = strictParsePositive(fact.costAmount)
+  if (qty === null || cost === null) return undefined
+  const total = Math.round(qty * cost * 100) / 100
+  return String(total)
 }
 
 export async function runExtraction(
@@ -76,6 +98,10 @@ export async function runExtraction(
             supplierName: fact.supplierName ?? null,
             deliveryTiming: fact.deliveryTiming ?? null,
             locationOrUse: fact.locationOrUse ?? null,
+            costAmount: fact.costAmount ?? null,
+            costCurrency: fact.costCurrency ?? null,
+            costQualifier: fact.costQualifier ?? null,
+            totalCostAmount: deriveSafeTotalCost(fact) ?? null,
             confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
             confidenceReason: fact.confidenceReason,
             uncertaintyFlags: fact.uncertaintyFlags,
