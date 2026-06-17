@@ -487,6 +487,94 @@ describe('runExtraction — cost field persistence and safe total derivation', (
     expect(data.totalCostAmount).toBe('40')
   })
 
+  it('does not derive total when quantity is "8 bags" (partial string)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Ordered 8 bags of hardcore at £5 each.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const, summary: 'test',
+          quantity: '8 bags', costAmount: '5', costQualifier: 'each' as const,
+          confidenceLabel: 'high' as const, confidenceReason: 'test', uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBeNull()
+  })
+
+  it('does not derive total when quantity is "about 8" (text prefix)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'About 8 bags at £5 each.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const, summary: 'test',
+          quantity: 'about 8', costAmount: '5', costQualifier: 'each' as const,
+          confidenceLabel: 'medium' as const, confidenceReason: 'test', uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBeNull()
+  })
+
+  it('does not derive total when costAmount is "5 each" (text suffix)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 8 bags at £5 each.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const, summary: 'test',
+          quantity: '8', costAmount: '5 each', costQualifier: 'each' as const,
+          confidenceLabel: 'high' as const, confidenceReason: 'test', uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBeNull()
+  })
+
+  it('does not derive total when costAmount is "5-ish" (non-decimal)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 8 bags at about £5.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const, summary: 'test',
+          quantity: '8', costAmount: '5-ish', costQualifier: 'each' as const,
+          confidenceLabel: 'medium' as const, confidenceReason: 'test', uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBeNull()
+  })
+
   it('persists null cost fields for facts with no cost information', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(

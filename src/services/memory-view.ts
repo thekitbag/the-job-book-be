@@ -38,6 +38,64 @@ const SUMMARY_SECTION_LABELS: Record<string, string> = {
   leftovers: 'Leftovers',
 }
 
+interface SummaryRow {
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  supplierName: string | null
+  costLabel: string | null
+  totalCostLabel: string | null
+  uncertaintyFlags: string[]
+  memoryItemIds: string[]
+}
+
+const SUMMARY_STRICT_DECIMAL_RE = /^\d+(\.\d+)?$/
+
+// Groups rows with the same materialName + unit. Merges quantities when all
+// rows in the group have strict numeric quantities and no uncertainty flags.
+// Incompatible or uncertain rows are kept as separate entries.
+function consolidateSummaryRows(rows: SummaryRow[]): SummaryRow[] {
+  const groups = new Map<string, SummaryRow[]>()
+  for (const row of rows) {
+    const key = `${row.materialName ?? ''}::${row.unit ?? ''}`
+    const group = groups.get(key)
+    if (group) group.push(row)
+    else groups.set(key, [row])
+  }
+
+  const result: SummaryRow[] = []
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.push(group[0])
+      continue
+    }
+    const allNumeric = group.every(
+      (r) => r.quantity != null && SUMMARY_STRICT_DECIMAL_RE.test(r.quantity),
+    )
+    const noUncertainty = group.every((r) => r.uncertaintyFlags.length === 0)
+    if (allNumeric && noUncertainty) {
+      const sumQty = group.reduce((acc, r) => acc + parseFloat(r.quantity!), 0)
+      const commonSupplier =
+        group.every((r) => r.supplierName === group[0].supplierName)
+          ? group[0].supplierName
+          : null
+      result.push({
+        materialName: group[0].materialName,
+        quantity: String(Math.round(sumQty * 1000) / 1000),
+        unit: group[0].unit,
+        supplierName: commonSupplier,
+        costLabel: null,
+        totalCostLabel: null,
+        uncertaintyFlags: [],
+        memoryItemIds: group.flatMap((r) => r.memoryItemIds),
+      })
+    } else {
+      result.push(...group)
+    }
+  }
+  return result
+}
+
 const SECTION_CONFIG = [
   { key: 'ordered_materials', label: 'Ordered materials' },
   { key: 'used_materials', label: 'Used materials' },
@@ -106,6 +164,7 @@ export async function getMemoryView(jobId: string, userId: string) {
         costCurrency: m.costCurrency,
         costQualifier: m.costQualifier,
         totalCostAmount: m.totalCostAmount,
+        uncertaintyFlags: fact?.uncertaintyFlags ?? [],
         sourceCandidateFactId: m.sourceCandidateFactId,
         reviewDecisionId: m.reviewDecisionId,
         createdAt: m.createdAt,
@@ -136,7 +195,7 @@ export async function getMemoryView(jobId: string, userId: string) {
 
   // summarySections: consolidated scan view for bought/used/leftovers
   const summarySections = SUMMARY_SECTION_KEYS.map((key) => {
-    const sectionItems = (bySection.get(key) ?? []).map((m) => ({
+    const rawRows: SummaryRow[] = (bySection.get(key) ?? []).map((m) => ({
       materialName: m.materialName,
       quantity: m.quantity,
       unit: m.unit,
@@ -146,7 +205,7 @@ export async function getMemoryView(jobId: string, userId: string) {
       uncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
       memoryItemIds: [m.id],
     }))
-    return { key, label: SUMMARY_SECTION_LABELS[key], items: sectionItems }
+    return { key, label: SUMMARY_SECTION_LABELS[key], items: consolidateSummaryRows(rawRows) }
   })
 
   return {
