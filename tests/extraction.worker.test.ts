@@ -345,3 +345,178 @@ describe('runExtraction — pilot correction guard', () => {
     expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
   })
 })
+
+// ── cost fields ───────────────────────────────────────────────────────────────
+
+describe('runExtraction — cost field persistence and safe total derivation', () => {
+  it('persists cost fields and derives total from 8 × £5 each', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 8 bags of hardcore from Jewson at £5 each.' }),
+    )
+
+    const costProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'Bought 8 bags of hardcore from Jewson at £5 each',
+          materialName: 'hardcore',
+          quantity: '8',
+          unit: 'bags',
+          supplierName: 'Jewson',
+          costAmount: '5',
+          costCurrency: 'GBP',
+          costQualifier: 'each' as const,
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit in transcript',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, costProvider)
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.costAmount).toBe('5')
+    expect(data.costCurrency).toBe('GBP')
+    expect(data.costQualifier).toBe('each')
+    expect(data.totalCostAmount).toBe('40')
+  })
+
+  it('derives total from non-integer unit cost: 12 × £8.50 = £102', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 12 sheets at £8.50 each.' }),
+    )
+
+    const costProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'Bought 12 sheets at £8.50 each',
+          quantity: '12',
+          unit: 'sheets',
+          costAmount: '8.50',
+          costCurrency: 'GBP',
+          costQualifier: 'each' as const,
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, costProvider)
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBe('102')
+  })
+
+  it('does not derive total when qualifier is approx; preserves cost_uncertain flag', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'About £40 of hardcore.' }),
+    )
+
+    const costProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'About £40 of hardcore',
+          materialName: 'hardcore',
+          costAmount: '40',
+          costCurrency: 'GBP',
+          costQualifier: 'approx' as const,
+          confidenceLabel: 'medium' as const,
+          confidenceReason: 'Approximate',
+          uncertaintyFlags: ['cost_uncertain'],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, costProvider)
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.costAmount).toBe('40')
+    expect(data.costQualifier).toBe('approx')
+    expect(data.totalCostAmount).toBeNull()
+    expect(data.uncertaintyFlags).toContain('cost_uncertain')
+  })
+
+  it('preserves provider-returned totalCostAmount for explicit total cost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 8 bags of hardcore for £40.' }),
+    )
+
+    const costProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'Bought 8 bags of hardcore for £40',
+          materialName: 'hardcore',
+          quantity: '8',
+          unit: 'bags',
+          costAmount: '40',
+          costCurrency: 'GBP',
+          costQualifier: 'total' as const,
+          totalCostAmount: '40',
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, costProvider)
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.costQualifier).toBe('total')
+    expect(data.totalCostAmount).toBe('40')
+  })
+
+  it('persists null cost fields for facts with no cost information', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Used 6 OSB boards on the back wall.' }),
+    )
+
+    const noCostProvider = {
+      name: 'stub',
+      model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'used_material' as const,
+          summary: 'Used 6 OSB boards on the back wall',
+          materialName: 'OSB',
+          quantity: '6',
+          unit: 'boards',
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    }
+
+    await runExtraction(TRANSCRIPT_ID, noCostProvider)
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.costAmount).toBeNull()
+    expect(data.costCurrency).toBeNull()
+    expect(data.costQualifier).toBeNull()
+    expect(data.totalCostAmount).toBeNull()
+  })
+})

@@ -52,6 +52,10 @@ interface ProposedMemory {
   supplierName: string | null
   deliveryTiming: string | null
   locationOrUse: string | null
+  costAmount: string | null
+  costCurrency: string | null
+  costQualifier: string | null
+  totalCostAmount: string | null
 }
 
 interface GroupedItemData {
@@ -76,6 +80,10 @@ type FactWithContext = {
   supplierName: string | null
   deliveryTiming: string | null
   locationOrUse: string | null
+  costAmount: string | null
+  costCurrency: string | null
+  costQualifier: string | null
+  totalCostAmount: string | null
   confidenceLabel: string
   uncertaintyFlags: string[]
   sourceNoteId: string
@@ -93,6 +101,10 @@ export interface CorrectedFields {
   supplierName?: string | null
   deliveryTiming?: string | null
   locationOrUse?: string | null
+  costAmount?: string | null
+  costCurrency?: string | null
+  costQualifier?: string | null
+  totalCostAmount?: string | null
 }
 
 export type QueueDecisionPayload =
@@ -112,6 +124,10 @@ function extractProposedMemory(f: FactWithContext): ProposedMemory {
     supplierName: f.supplierName,
     deliveryTiming: f.deliveryTiming,
     locationOrUse: f.locationOrUse,
+    costAmount: f.costAmount,
+    costCurrency: f.costCurrency,
+    costQualifier: f.costQualifier,
+    totalCostAmount: f.totalCostAmount,
   }
 }
 
@@ -444,6 +460,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           supplierName: pm.supplierName,
           deliveryTiming: pm.deliveryTiming,
           locationOrUse: pm.locationOrUse,
+          costAmount: pm.costAmount,
+          costCurrency: pm.costCurrency,
+          costQualifier: pm.costQualifier,
+          totalCostAmount: pm.totalCostAmount,
         },
       })
 
@@ -495,6 +515,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           supplierName: corrected.supplierName ?? null,
           deliveryTiming: corrected.deliveryTiming ?? null,
           locationOrUse: corrected.locationOrUse ?? null,
+          costAmount: corrected.costAmount ?? null,
+          costCurrency: corrected.costCurrency ?? null,
+          costQualifier: corrected.costQualifier ?? null,
+          totalCostAmount: corrected.totalCostAmount ?? null,
         },
       })
 

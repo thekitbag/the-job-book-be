@@ -11,6 +11,33 @@ const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
   WATCH_OUT: 'watch_outs',
 }
 
+// Build a display cost label from stored cost fields (GBP only for now; ISO code fallback)
+function formatCostLabel(
+  costAmount: string | null,
+  costCurrency: string | null,
+  costQualifier: string | null,
+): string | null {
+  if (!costAmount) return null
+  const symbol = costCurrency === 'GBP' ? '£' : (costCurrency ? `${costCurrency} ` : '')
+  const qualifier = costQualifier === 'each' ? ' each'
+    : costQualifier === 'approx' ? ' (approx)' : ''
+  return `${symbol}${costAmount}${qualifier}`
+}
+
+function formatTotalCostLabel(totalCostAmount: string | null, costCurrency: string | null): string | null {
+  if (!totalCostAmount) return null
+  const symbol = costCurrency === 'GBP' ? '£' : (costCurrency ? `${costCurrency} ` : '')
+  return `${symbol}${totalCostAmount} total`
+}
+
+// Summary sections cover only the three scan-relevant types for bought/used/leftovers.
+const SUMMARY_SECTION_KEYS = ['ordered_materials', 'used_materials', 'leftovers'] as const
+const SUMMARY_SECTION_LABELS: Record<string, string> = {
+  ordered_materials: 'Bought / ordered',
+  used_materials: 'Used',
+  leftovers: 'Leftovers',
+}
+
 const SECTION_CONFIG = [
   { key: 'ordered_materials', label: 'Ordered materials' },
   { key: 'used_materials', label: 'Used materials' },
@@ -75,6 +102,10 @@ export async function getMemoryView(jobId: string, userId: string) {
         supplierName: m.supplierName,
         deliveryTiming: m.deliveryTiming,
         locationOrUse: m.locationOrUse,
+        costAmount: m.costAmount,
+        costCurrency: m.costCurrency,
+        costQualifier: m.costQualifier,
+        totalCostAmount: m.totalCostAmount,
         sourceCandidateFactId: m.sourceCandidateFactId,
         reviewDecisionId: m.reviewDecisionId,
         createdAt: m.createdAt,
@@ -103,6 +134,21 @@ export async function getMemoryView(jobId: string, userId: string) {
     }))
   )
 
+  // summarySections: consolidated scan view for bought/used/leftovers
+  const summarySections = SUMMARY_SECTION_KEYS.map((key) => {
+    const sectionItems = (bySection.get(key) ?? []).map((m) => ({
+      materialName: m.materialName,
+      quantity: m.quantity,
+      unit: m.unit,
+      supplierName: m.supplierName,
+      costLabel: formatCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
+      totalCostLabel: formatTotalCostLabel(m.totalCostAmount, m.costCurrency),
+      uncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
+      memoryItemIds: [m.id],
+    }))
+    return { key, label: SUMMARY_SECTION_LABELS[key], items: sectionItems }
+  })
+
   return {
     job: {
       id: job.id,
@@ -115,6 +161,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     },
     generatedAt: new Date().toISOString(),
     sections,
+    summarySections,
     stillToCheck: {
       count: stillToCheckItems.length,
       items: stillToCheckItems,

@@ -496,3 +496,46 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
     expect(body.notesByDay[0].localDate).toBe('2026-06-11')
   })
 })
+
+// ── Cost fields ───────────────────────────────────────────────────────────────
+
+describe('GET /api/internal/pilot/jobs/:jobId/inspection — cost fields', () => {
+  const headers = { 'x-pilot-user-id': USER_ID, 'x-internal-inspection-key': INSPECTION_KEY }
+
+  it('includes cost fields in candidateFacts', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.rawNote.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeNote({
+        candidateFacts: [
+          makeFact({ costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
+        ],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ notesByDay: Array<{ notes: Array<{ candidateFacts: Array<Record<string, unknown>> }> }> }>()
+    const fact = body.notesByDay[0].notes[0].candidateFacts[0]
+    expect(fact.costAmount).toBe('5')
+    expect(fact.costCurrency).toBe('GBP')
+    expect(fact.costQualifier).toBe('each')
+    expect(fact.totalCostAmount).toBe('40')
+  })
+
+  it('includes cost fields in memoryItems', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json<{ memoryItems: Array<Record<string, unknown>> }>()
+    expect(body.memoryItems[0].costAmount).toBe('5')
+    expect(body.memoryItems[0].costCurrency).toBe('GBP')
+    expect(body.memoryItems[0].costQualifier).toBe('each')
+    expect(body.memoryItems[0].totalCostAmount).toBe('40')
+  })
+})

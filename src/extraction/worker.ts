@@ -1,5 +1,5 @@
 import { prisma } from '../db/client.js'
-import type { ExtractionProvider } from './types.js'
+import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
 
 function toDbFactType(ft: string): string {
@@ -8,6 +8,19 @@ function toDbFactType(ft: string): string {
 
 function toDbConfidence(cl: string): string {
   return cl.toUpperCase()
+}
+
+// Derive totalCostAmount only when qualifier is "each" and both quantity and
+// costAmount are unambiguous numerics. Returns undefined (not null) to leave
+// the field unchanged when derivation is not safe.
+function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
+  if (fact.totalCostAmount) return fact.totalCostAmount
+  if (fact.costQualifier !== 'each') return undefined
+  const qty = parseFloat(fact.quantity ?? '')
+  const cost = parseFloat(fact.costAmount ?? '')
+  if (!isFinite(qty) || !isFinite(cost) || qty <= 0 || cost <= 0) return undefined
+  const total = Math.round(qty * cost * 100) / 100
+  return String(total)
 }
 
 export async function runExtraction(
@@ -76,6 +89,10 @@ export async function runExtraction(
             supplierName: fact.supplierName ?? null,
             deliveryTiming: fact.deliveryTiming ?? null,
             locationOrUse: fact.locationOrUse ?? null,
+            costAmount: fact.costAmount ?? null,
+            costCurrency: fact.costCurrency ?? null,
+            costQualifier: fact.costQualifier ?? null,
+            totalCostAmount: deriveSafeTotalCost(fact) ?? null,
             confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
             confidenceReason: fact.confidenceReason,
             uncertaintyFlags: fact.uncertaintyFlags,

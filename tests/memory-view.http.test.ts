@@ -360,3 +360,72 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
     expect(body.job.jobType).toBe('garden_room')
   })
 })
+
+// ── Cost fields and summarySections ──────────────────────────────────────────
+
+describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+
+  it('includes cost fields in section items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].costAmount).toBe('5')
+    expect(ordered?.items[0].costCurrency).toBe('GBP')
+    expect(ordered?.items[0].costQualifier).toBe('each')
+    expect(ordered?.items[0].totalCostAmount).toBe('40')
+  })
+
+  it('includes summarySections with correct keys and labels', async () => {
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; label: string; items: unknown[] }> }>()
+    expect(body.summarySections).toHaveLength(3)
+    expect(body.summarySections[0]).toMatchObject({ key: 'ordered_materials', label: 'Bought / ordered' })
+    expect(body.summarySections[1]).toMatchObject({ key: 'used_materials', label: 'Used' })
+    expect(body.summarySections[2]).toMatchObject({ key: 'leftovers', label: 'Leftovers' })
+  })
+
+  it('summarySections item has costLabel, totalCostLabel, memoryItemIds, and uncertaintyFlags', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        costAmount: '5',
+        costCurrency: 'GBP',
+        costQualifier: 'each',
+        totalCostAmount: '40',
+        sourceFact: makeSourceFact({ uncertaintyFlags: [] }),
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items).toHaveLength(1)
+    expect(ordered?.items[0].costLabel).toBe('£5 each')
+    expect(ordered?.items[0].totalCostLabel).toBe('£40 total')
+    expect(ordered?.items[0].memoryItemIds).toEqual([MEMORY_ID])
+    expect(ordered?.items[0].uncertaintyFlags).toEqual([])
+  })
+
+  it('summarySections costLabel and totalCostLabel are null when no cost stored', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
+    const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].costLabel).toBeNull()
+    expect(ordered?.items[0].totalCostLabel).toBeNull()
+  })
+})
