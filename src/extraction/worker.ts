@@ -32,6 +32,28 @@ function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
   return String(total)
 }
 
+// When the provider supplies an explicit totalCostAmount that disagrees with
+// quantity × costAmount (both strict numerics, qualifier "each"), the conflict
+// is unresolvable without the pilot's input — mark the fact as cost_uncertain.
+function detectCostConflict(fact: CandidateFactDraft): boolean {
+  if (fact.costQualifier !== 'each') return false
+  if (!fact.totalCostAmount) return false
+  const qty = strictParsePositive(fact.quantity)
+  const cost = strictParsePositive(fact.costAmount)
+  const total = strictParsePositive(fact.totalCostAmount)
+  if (qty === null || cost === null || total === null) return false
+  const derived = Math.round(qty * cost * 100) / 100
+  return Math.abs(derived - total) > 0.001
+}
+
+function resolveUncertaintyFlags(fact: CandidateFactDraft): string[] {
+  const flags = fact.uncertaintyFlags ?? []
+  if (detectCostConflict(fact) && !flags.includes('cost_uncertain')) {
+    return [...flags, 'cost_uncertain']
+  }
+  return flags
+}
+
 export async function runExtraction(
   transcriptId: string,
   provider: ExtractionProvider,
@@ -104,7 +126,7 @@ export async function runExtraction(
             totalCostAmount: deriveSafeTotalCost(fact) ?? null,
             confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
             confidenceReason: fact.confidenceReason,
-            uncertaintyFlags: fact.uncertaintyFlags,
+            uncertaintyFlags: resolveUncertaintyFlags(fact),
             extractionProvider: provider.name,
             extractionModel: provider.model,
             extractionSchemaVersion: result.schemaVersion,

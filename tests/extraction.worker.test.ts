@@ -575,6 +575,93 @@ describe('runExtraction — cost field persistence and safe total derivation', (
     expect(data.totalCostAmount).toBeNull()
   })
 
+  it('adds cost_uncertain when quantity × costAmount conflicts with explicit totalCostAmount', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 10 sheets at £5 each, total £40.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'Bought 10 sheets at £5 each, total £40',
+          quantity: '10',
+          costAmount: '5',
+          costQualifier: 'each' as const,
+          totalCostAmount: '40',  // should be 50; conflict
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBe('40')  // explicit total preserved, not derived
+    expect(data.uncertaintyFlags).toContain('cost_uncertain')
+  })
+
+  it('does not add cost_uncertain when totals agree', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Bought 10 sheets at £5 each, total £50.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'Bought 10 sheets at £5 each, total £50',
+          quantity: '10',
+          costAmount: '5',
+          costQualifier: 'each' as const,
+          totalCostAmount: '50',  // matches 10 × 5
+          confidenceLabel: 'high' as const,
+          confidenceReason: 'Explicit',
+          uncertaintyFlags: [],
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.totalCostAmount).toBe('50')
+    expect(data.uncertaintyFlags).not.toContain('cost_uncertain')
+  })
+
+  it('preserves existing cost_uncertain when conflict is detected', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'About 10 sheets at roughly £5 each, total £40.' }),
+    )
+
+    await runExtraction(TRANSCRIPT_ID, {
+      name: 'stub', model: 'stub-v1',
+      extractFacts: async () => ({
+        facts: [{
+          factType: 'ordered_material' as const,
+          summary: 'test',
+          quantity: '10',
+          costAmount: '5',
+          costQualifier: 'each' as const,
+          totalCostAmount: '40',
+          confidenceLabel: 'medium' as const,
+          confidenceReason: 'Approximate',
+          uncertaintyFlags: ['cost_uncertain'],  // already set by provider
+        }],
+        schemaVersion: 'v1',
+      }),
+    })
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    const flagCount = (data.uncertaintyFlags as string[]).filter((f: string) => f === 'cost_uncertain').length
+    expect(flagCount).toBe(1)  // must not duplicate
+  })
+
   it('persists null cost fields for facts with no cost information', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
