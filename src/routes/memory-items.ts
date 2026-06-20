@@ -1,0 +1,63 @@
+import type { FastifyPluginAsync } from 'fastify'
+import { ErrorCode } from '../types/errors.js'
+import { VALID_MEMORY_TYPES } from '../services/review-queue.js'
+import { patchMemoryItem } from '../services/memory-items.js'
+import { handleServiceError } from './jobs.js'
+
+const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
+function isValidDecimalString(v: unknown): boolean {
+  return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
+}
+const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown'])
+
+const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
+  fastify.patch<{
+    Params: { jobId: string; memoryItemId: string }
+    Body: {
+      memoryType?: string
+      summary?: string | null
+      materialName?: string | null
+      quantity?: string | null
+      unit?: string | null
+      supplierName?: string | null
+      deliveryTiming?: string | null
+      locationOrUse?: string | null
+      costAmount?: string | null
+      costCurrency?: string | null
+      costQualifier?: string | null
+      totalCostAmount?: string | null
+    }
+  }>('/api/jobs/:jobId/memory-items/:memoryItemId', async (request, reply) => {
+    const { jobId, memoryItemId } = request.params
+    const body = request.body ?? {}
+
+    const missing = (field: string) =>
+      reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: `${field} is required` })
+
+    if (!body.memoryType) return missing('memoryType')
+    if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
+      return reply.code(400).send({
+        code: ErrorCode.INVALID_FIELD,
+        message: 'memoryType must be a valid non-unclear memory type',
+      })
+    }
+    if (body.costAmount != null && !isValidDecimalString(body.costAmount)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costAmount must be a decimal string' })
+    }
+    if (body.totalCostAmount != null && !isValidDecimalString(body.totalCostAmount)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'totalCostAmount must be a decimal string' })
+    }
+    if (body.costQualifier != null && !VALID_QUALIFIERS.has(body.costQualifier)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costQualifier must be each, total, approx, or unknown' })
+    }
+
+    try {
+      const result = await patchMemoryItem(jobId, memoryItemId, request.userId, body as never)
+      return reply.send(result)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+}
+
+export default memoryItemsRoutes

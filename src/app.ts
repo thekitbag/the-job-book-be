@@ -17,6 +17,7 @@ import reviewRoutes from './routes/review.js'
 import reviewQueueRoutes from './routes/review-queue.js'
 import inspectionRoutes from './routes/inspection.js'
 import memoryViewRoutes from './routes/memory-view.js'
+import memoryItemsRoutes from './routes/memory-items.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
 
 export interface AppOptions {
@@ -70,6 +71,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(reviewQueueRoutes)
   fastify.register(inspectionRoutes)
   fastify.register(memoryViewRoutes)
+  fastify.register(memoryItemsRoutes)
 
   // @fastify/multipart v9 calls req.raw.destroy(err) when the file size limit is exceeded,
   // which bypasses route try/catch and lands here. Remap to our stable error code.
