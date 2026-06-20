@@ -391,6 +391,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
   const memoryItems = await prisma.memoryItem.findMany({
     where: { jobId },
+    include: { sourceFact: { select: { uncertaintyFlags: true } } },
     orderBy: { createdAt: 'desc' },
   })
 
@@ -399,6 +400,17 @@ export async function getReviewQueue(jobId: string, userId: string) {
     summary: m.summary,
     memoryType: m.memoryType.toLowerCase(),
     timeLabel: computeTimeLabel(m.createdAt, now),
+    materialName: m.materialName,
+    quantity: m.quantity,
+    unit: m.unit,
+    supplierName: m.supplierName,
+    deliveryTiming: m.deliveryTiming,
+    locationOrUse: m.locationOrUse,
+    costAmount: m.costAmount,
+    costCurrency: m.costCurrency,
+    costQualifier: m.costQualifier,
+    totalCostAmount: m.totalCostAmount,
+    uncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
   }))
 
   return { jobId, generatedAt: now, sections, alreadyRemembered }

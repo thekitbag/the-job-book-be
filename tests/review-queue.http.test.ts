@@ -416,6 +416,36 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(body.alreadyRemembered[0].timeLabel).toBeDefined()
   })
 
+  it('alreadyRemembered includes structured fields for frontend display', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
+      makeMemoryItem({
+        costAmount: '5',
+        costCurrency: 'GBP',
+        costQualifier: 'each',
+        totalCostAmount: '30',
+        sourceFact: { uncertaintyFlags: ['cost_uncertain'] },
+      }),
+    ])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}/review-queue`,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    const item = res.json().alreadyRemembered[0]
+    expect(item.materialName).toBe('OSB')
+    expect(item.quantity).toBe('6')
+    expect(item.unit).toBe('boards')
+    expect(item.locationOrUse).toBe('back wall')
+    expect(item.costAmount).toBe('5')
+    expect(item.costCurrency).toBe('GBP')
+    expect(item.costQualifier).toBe('each')
+    expect(item.totalCostAmount).toBe('30')
+    expect(item.uncertaintyFlags).toEqual(['cost_uncertain'])
+  })
+
   it('item ID is stable: createMany receives the same deterministic ID on consecutive GETs', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
