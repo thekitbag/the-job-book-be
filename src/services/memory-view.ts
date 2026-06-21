@@ -164,7 +164,8 @@ export async function getMemoryView(jobId: string, userId: string) {
         costCurrency: m.costCurrency,
         costQualifier: m.costQualifier,
         totalCostAmount: m.totalCostAmount,
-        uncertaintyFlags: fact?.uncertaintyFlags ?? [],
+        uncertaintyFlags: m.unresolvedFlags,
+        sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
         sourceCandidateFactId: m.sourceCandidateFactId,
         reviewDecisionId: m.reviewDecisionId,
         createdAt: m.createdAt,
@@ -202,7 +203,7 @@ export async function getMemoryView(jobId: string, userId: string) {
       supplierName: m.supplierName,
       costLabel: formatCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
       totalCostLabel: formatTotalCostLabel(m.totalCostAmount, m.costCurrency),
-      uncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
+      uncertaintyFlags: m.unresolvedFlags,
       memoryItemIds: [m.id],
     }))
     return { key, label: SUMMARY_SECTION_LABELS[key], items: consolidateSummaryRows(rawRows) }

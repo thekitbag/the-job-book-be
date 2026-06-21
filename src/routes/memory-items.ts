@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
 import { VALID_MEMORY_TYPES } from '../services/review-queue.js'
-import { patchMemoryItem } from '../services/memory-items.js'
+import { patchMemoryItem, verifyMemoryItem } from '../services/memory-items.js'
 import { handleServiceError } from './jobs.js'
 
 const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
@@ -9,6 +9,7 @@ function isValidDecimalString(v: unknown): boolean {
   return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
 }
 const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown'])
+const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
 
 const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch<{
@@ -26,6 +27,7 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       costCurrency?: string | null
       costQualifier?: string | null
       totalCostAmount?: string | null
+      uncertaintyResolution?: string
     }
   }>('/api/jobs/:jobId/memory-items/:memoryItemId', async (request, reply) => {
     const { jobId, memoryItemId } = request.params
@@ -50,9 +52,24 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     if (body.costQualifier != null && !VALID_QUALIFIERS.has(body.costQualifier)) {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costQualifier must be each, total, approx, or unknown' })
     }
+    if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
+    }
 
     try {
       const result = await patchMemoryItem(jobId, memoryItemId, request.userId, body as never)
+      return reply.send(result)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  fastify.post<{
+    Params: { jobId: string; memoryItemId: string }
+  }>('/api/jobs/:jobId/memory-items/:memoryItemId/verify', async (request, reply) => {
+    const { jobId, memoryItemId } = request.params
+    try {
+      const result = await verifyMemoryItem(jobId, memoryItemId, request.userId)
       return reply.send(result)
     } catch (err: unknown) {
       return handleServiceError(err, reply)

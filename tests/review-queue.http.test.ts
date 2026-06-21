@@ -177,6 +177,7 @@ function makeMemoryItem(overrides?: object) {
     supplierName: null,
     deliveryTiming: null,
     locationOrUse: 'back wall',
+    unresolvedFlags: [],
     createdAt: TODAY_CAPTURE,
     updatedAt: TODAY_CAPTURE,
     ...overrides,
@@ -424,6 +425,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
         costCurrency: 'GBP',
         costQualifier: 'each',
         totalCostAmount: '30',
+        unresolvedFlags: ['cost_uncertain'],
         sourceFact: { uncertaintyFlags: ['cost_uncertain'] },
       }),
     ])
@@ -444,6 +446,27 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(item.costQualifier).toBe('each')
     expect(item.totalCostAmount).toBe('30')
     expect(item.uncertaintyFlags).toEqual(['cost_uncertain'])
+    expect(item.sourceUncertaintyFlags).toEqual(['cost_uncertain'])
+  })
+
+  it('alreadyRemembered uncertaintyFlags comes from unresolvedFlags (not sourceFact)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
+      makeMemoryItem({
+        unresolvedFlags: [],
+        sourceFact: { uncertaintyFlags: ['material_uncertain'] },
+      }),
+    ])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}/review-queue`,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    const item = res.json().alreadyRemembered[0]
+    expect(item.uncertaintyFlags).toEqual([])
+    expect(item.sourceUncertaintyFlags).toEqual(['material_uncertain'])
   })
 
   it('item ID is stable: createMany receives the same deterministic ID on consecutive GETs', async () => {
@@ -995,6 +1018,122 @@ describe('POST /api/jobs/:jobId/review-queue-decisions — cost field validation
           costQualifier: 'each',
           totalCostAmount: '40',
         }),
+      }),
+    )
+  })
+
+  it('returns 400 INVALID_FIELD when uncertaintyResolution is not a valid value', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm', uncertaintyResolution: 'maybe' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+  })
+})
+
+// ── uncertaintyResolution on confirm/correct ──────────────────────────────────
+
+describe('POST /api/jobs/:jobId/review-queue-decisions — uncertaintyResolution', () => {
+  it('confirm omitting uncertaintyResolution stores unresolvedFlags: []', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ uncertaintyFlags: ['material_uncertain'] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm' },
+    })
+
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: [] }) }),
+    )
+  })
+
+  it('confirm with uncertaintyResolution:resolved stores unresolvedFlags: []', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ uncertaintyFlags: ['material_uncertain'] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm', uncertaintyResolution: 'resolved' },
+    })
+
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: [] }) }),
+    )
+  })
+
+  it('confirm with uncertaintyResolution:still_unsure copies flags from queue item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ uncertaintyFlags: ['material_uncertain', 'approximate_quantity'] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { queueItemId: ITEM_ID, action: 'confirm', uncertaintyResolution: 'still_unsure' },
+    })
+
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unresolvedFlags: ['material_uncertain', 'approximate_quantity'] }),
+      }),
+    )
+  })
+
+  it('correct omitting uncertaintyResolution stores unresolvedFlags: []', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ uncertaintyFlags: ['conflicting_quantity'] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID, action: 'correct',
+        corrected: { memoryType: 'used_material', summary: 'Used 6 OSB boards' },
+      },
+    })
+
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: [] }) }),
+    )
+  })
+
+  it('correct with uncertaintyResolution:still_unsure copies flags from queue item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(
+      makeQueueItem({ uncertaintyFlags: ['conflicting_quantity'] }),
+    )
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${JOB_ID}/review-queue-decisions`,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: {
+        queueItemId: ITEM_ID, action: 'correct',
+        uncertaintyResolution: 'still_unsure',
+        corrected: { memoryType: 'used_material', summary: 'Used 6 OSB boards' },
+      },
+    })
+
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unresolvedFlags: ['conflicting_quantity'] }),
       }),
     )
   })
