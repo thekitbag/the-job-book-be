@@ -115,6 +115,17 @@ interface CostRow {
   memoryItemIds: string[]
 }
 
+type SpendExclusionReason = 'no_cost_remembered' | 'cost_worth_checking'
+
+interface ExcludedSpendRow {
+  memoryItemId: string
+  itemLabel: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  reason: SpendExclusionReason
+}
+
 interface OrderedMaterialsCostSummary {
   knownSpendAmount: string | null
   knownSpendCurrency: string | null
@@ -124,6 +135,14 @@ interface OrderedMaterialsCostSummary {
   uncertainCostCount: number
   excludedMemoryItemIds: string[]
   rows: CostRow[]
+  excludedRows: ExcludedSpendRow[]
+}
+
+// itemLabel must be non-empty: prefer trimmed materialName, fall back to the
+// memory item's existing summary. Never synthesize an anonymous label.
+function resolveItemLabel(materialName: string | null, summary: string): string {
+  const trimmed = materialName?.trim()
+  return trimmed ? trimmed : summary
 }
 
 type IncludedItem = {
@@ -213,34 +232,51 @@ function buildOrderedMaterialsCostSummary(
     materialName: string | null
     quantity: string | null
     unit: string | null
+    summary: string
     costAmount: string | null
     costCurrency: string | null
     totalCostAmount: string | null
     unresolvedFlags: string[]
   }>,
 ): OrderedMaterialsCostSummary {
-  const includedItems: IncludedItem[] = []
-  const missingCostIds: string[] = []
-  const uncertainCostIds: string[] = []
+  type Item = (typeof items)[number]
+
+  const gbpItems: IncludedItem[] = []
+  const excludedRows: ExcludedSpendRow[] = []
+
+  // Classify each trusted bought/ordered item exactly once: it either contributes
+  // an included GBP line total, or it gets an excluded row with a reason.
+  const excludeRow = (m: Item, reason: SpendExclusionReason) => {
+    excludedRows.push({
+      memoryItemId: m.id,
+      itemLabel: resolveItemLabel(m.materialName, m.summary),
+      materialName: m.materialName,
+      quantity: m.quantity,
+      unit: m.unit,
+      reason,
+    })
+  }
 
   for (const m of items) {
-    if (m.unresolvedFlags.length > 0) {
-      uncertainCostIds.push(m.id)
+    // no_cost_remembered: both costAmount and totalCostAmount absent, no other
+    // cost evidence (unresolved flags count as evidence worth checking).
+    if (m.unresolvedFlags.length === 0 && !m.totalCostAmount && !m.costAmount) {
+      excludeRow(m, 'no_cost_remembered')
       continue
     }
-    if (!m.totalCostAmount) {
-      if (!m.costAmount) {
-        missingCostIds.push(m.id)
-      } else {
-        uncertainCostIds.push(m.id)
-      }
+    // Everything else excluded is cost_worth_checking: unresolved flags, an
+    // ambiguous basis (costAmount without a safe total), or missing currency.
+    if (m.unresolvedFlags.length > 0 || !m.totalCostAmount || !m.costCurrency) {
+      excludeRow(m, 'cost_worth_checking')
       continue
     }
-    if (!m.costCurrency) {
-      uncertainCostIds.push(m.id)
+    // Trusted line total present. Only GBP contributes to the pilot aggregate;
+    // any other currency is excluded as worth checking.
+    if (m.costCurrency !== 'GBP') {
+      excludeRow(m, 'cost_worth_checking')
       continue
     }
-    includedItems.push({
+    gbpItems.push({
       id: m.id,
       materialName: m.materialName,
       quantity: m.quantity,
@@ -249,16 +285,6 @@ function buildOrderedMaterialsCostSummary(
       costCurrency: m.costCurrency,
     })
   }
-
-  const gbpItems = includedItems.filter((i) => i.costCurrency === 'GBP')
-  const otherItems = includedItems.filter((i) => i.costCurrency !== 'GBP')
-
-  const includedIds = gbpItems.map((i) => i.id)
-  const excludedIds = [
-    ...missingCostIds,
-    ...uncertainCostIds,
-    ...otherItems.map((i) => i.id),
-  ]
 
   let knownSpendAmount: string | null = null
   let knownSpendLabel: string | null = null
@@ -272,15 +298,18 @@ function buildOrderedMaterialsCostSummary(
     knownSpendLabel = `£${knownSpendAmount} known spend`
   }
 
+  // Legacy ID arrays and counts are derived from the classified rows, not a
+  // separate branch, so the two views can never disagree.
   return {
     knownSpendAmount,
     knownSpendCurrency: gbpItems.length > 0 ? 'GBP' : null,
     knownSpendLabel,
-    includedMemoryItemIds: includedIds,
-    missingCostCount: missingCostIds.length,
-    uncertainCostCount: uncertainCostIds.length + otherItems.length,
-    excludedMemoryItemIds: excludedIds,
+    includedMemoryItemIds: gbpItems.map((i) => i.id),
+    missingCostCount: excludedRows.filter((r) => r.reason === 'no_cost_remembered').length,
+    uncertainCostCount: excludedRows.filter((r) => r.reason === 'cost_worth_checking').length,
+    excludedMemoryItemIds: excludedRows.map((r) => r.memoryItemId),
     rows: buildCostRows(gbpItems),
+    excludedRows,
   }
 }
 
