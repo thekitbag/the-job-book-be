@@ -189,3 +189,17 @@ Your handoff must include, at minimum:
 - any risks or follow-up needed
 
 If the brief asks for an example payload, provider configuration, migration notes, or failure/retry behaviour, include it explicitly.
+
+The handoff must be self-contained in the conversation with the tech lead. Do not replace the handoff with "see the PR description". The PR description may repeat the same information, but it is not a substitute for reporting it directly.
+
+Backend handoffs must include:
+
+- branch and PR link
+- schema and migration status, including migration name if any
+- files changed and what changed in each important file
+- endpoint, response-shape, validation, and error-behaviour changes
+- key data rules or implementation decisions
+- exact test/build/audit commands and results
+- frontend contract risks, API mismatches, or follow-up needed
+
+If the active brief has a `Handoff Back` checklist, answer every item directly.
