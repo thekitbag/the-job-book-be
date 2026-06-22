@@ -630,6 +630,34 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculati
     )
   })
 
+  it('uncertaintyResolution resolved does not clear cost_uncertain when conflict is present', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({
+        quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each',
+        // explicit total contradicts 8 × £5 = £40
+        totalCostAmount: '45', unresolvedFlags: [],
+      }),
+    )
+
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      // Explicitly patch totalCostAmount to the conflicting value — this is the case where
+    // Mike tries to "resolve" while providing a total that still contradicts qty × unit cost.
+    payload: { memoryType: 'ordered_material', totalCostAmount: '45', uncertaintyResolution: 'resolved' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    // Arithmetic conflict must block resolution — cost_uncertain must remain
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unresolvedFlags: expect.arrayContaining(['cost_uncertain']) }),
+      }),
+    )
+    expect(res.json().uncertaintyFlags).toContain('cost_uncertain')
+  })
+
   it('does not derive when qualifier is not each', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(

@@ -799,6 +799,29 @@ describe('GET /api/jobs/:jobId/memory-view — costSummary', () => {
     expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID)
   })
 
+  it('item with cost_uncertain from unresolvable conflict is excluded from known spend', async () => {
+    // Regression: uncertaintyResolution:'resolved' on a conflicting PATCH must not clear cost_uncertain,
+    // and any item that still carries cost_uncertain must be excluded here regardless of how it got the flag.
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each',
+        totalCostAmount: '45',          // conflicts with 8 × £5 = £40
+        unresolvedFlags: ['cost_uncertain'],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const om = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+      .costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.includedMemoryItemIds).toEqual([])
+    expect(om.uncertainCostCount).toBe(1)
+    expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID)
+  })
+
   it('counts item with no costAmount or totalCostAmount as missingCost', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([

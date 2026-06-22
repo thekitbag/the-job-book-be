@@ -65,7 +65,8 @@ export async function patchMemoryItem(
   } else if (!conflict) {
     baseFlags = baseFlags.filter((f) => f !== 'cost_uncertain')
   }
-  const unresolvedFlags = patch.uncertaintyResolution === 'resolved' ? [] : baseFlags
+  // 'resolved' may not override a freshly detected arithmetic conflict
+  const unresolvedFlags = (!conflict && patch.uncertaintyResolution === 'resolved') ? [] : baseFlags
 
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
