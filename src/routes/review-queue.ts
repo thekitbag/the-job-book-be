@@ -33,6 +33,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
     Body: {
       queueItemId?: string
       action?: string
+      uncertaintyResolution?: string
       corrected?: {
         memoryType?: string
         summary?: string
@@ -64,6 +65,11 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'action must be confirm, correct, or dismiss' })
     }
 
+    const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
+    if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
+    }
+
     if (body.action === 'correct') {
       if (!body.corrected?.summary) return missing('corrected.summary')
       if (!body.corrected?.memoryType) return missing('corrected.memoryType')
@@ -90,6 +96,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       const result = await submitQueueDecision(jobId, request.userId, {
         queueItemId: body.queueItemId,
         action: body.action as 'confirm' | 'correct' | 'dismiss',
+        uncertaintyResolution: body.uncertaintyResolution as 'resolved' | 'still_unsure' | undefined,
         corrected: body.corrected as never,
         reason: body.reason,
       })

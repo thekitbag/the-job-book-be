@@ -78,6 +78,7 @@ function makeExistingMemoryItem(overrides?: object) {
     costCurrency: null,
     costQualifier: null,
     totalCostAmount: null,
+    unresolvedFlags: [],
     createdAt: new Date('2026-06-20T09:00:00.000Z'),
     updatedAt: new Date('2026-06-20T09:00:00.000Z'),
     ...overrides,
@@ -332,10 +333,10 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — happy path', () 
     expect(typeof body.source.transcriptText).toBe('string')
   })
 
-  it('includes uncertaintyFlags from sourceFact in response', async () => {
+  it('uncertaintyFlags in response comes from unresolvedFlags', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(
-      makeUpdatedMemoryItem({ sourceFact: makeSourceFact({ uncertaintyFlags: ['material_uncertain'] }) }),
+      makeUpdatedMemoryItem({ unresolvedFlags: ['material_uncertain'] }),
     )
 
     const res = await app.inject({
@@ -345,6 +346,25 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — happy path', () 
     })
 
     expect(res.json().uncertaintyFlags).toEqual(['material_uncertain'])
+  })
+
+  it('sourceUncertaintyFlags in response comes from sourceFact', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(
+      makeUpdatedMemoryItem({
+        unresolvedFlags: [],
+        sourceFact: makeSourceFact({ uncertaintyFlags: ['material_uncertain'] }),
+      }),
+    )
+
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(res.json().uncertaintyFlags).toEqual([])
+    expect(res.json().sourceUncertaintyFlags).toEqual(['material_uncertain'])
   })
 
   it('does not modify candidate fact status', async () => {
@@ -370,5 +390,146 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — happy path', () 
     })
 
     expect(prisma.queueItem.createMany).not.toHaveBeenCalled()
+  })
+})
+
+// ── PATCH uncertaintyResolution ───────────────────────────────────────────────
+
+describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — uncertaintyResolution', () => {
+  it('returns 400 INVALID_FIELD when uncertaintyResolution is not a valid value', async () => {
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', uncertaintyResolution: 'maybe' },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+  })
+
+  it('resolved clears unresolvedFlags to []', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ unresolvedFlags: ['material_uncertain'] }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', uncertaintyResolution: 'resolved' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: [] }) }),
+    )
+  })
+
+  it('still_unsure preserves existing unresolvedFlags', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ unresolvedFlags: ['material_uncertain'] }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', uncertaintyResolution: 'still_unsure' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: ['material_uncertain'] }) }),
+    )
+  })
+
+  it('omitting uncertaintyResolution preserves existing unresolvedFlags', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ unresolvedFlags: ['approximate_quantity'] }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: ['approximate_quantity'] }) }),
+    )
+  })
+})
+
+// ── POST /verify ──────────────────────────────────────────────────────────────
+
+const VERIFY_URL = `/api/jobs/${JOB_ID}/memory-items/${MEMORY_ID}/verify`
+
+describe('POST /api/jobs/:jobId/memory-items/:memoryItemId/verify', () => {
+  it('returns 404 MEMORY_ITEM_NOT_FOUND when item does not exist', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(null)
+
+    const res = await app.inject({
+      method: 'POST', url: VERIFY_URL,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toMatchObject({ code: 'MEMORY_ITEM_NOT_FOUND' })
+  })
+
+  it('returns 403 when job belongs to another user', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob({ ownerUserId: OTHER_USER_ID }))
+
+    const res = await app.inject({
+      method: 'POST', url: VERIFY_URL,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toMatchObject({ code: 'FORBIDDEN' })
+  })
+
+  it('clears unresolvedFlags to [] and returns normalized item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ unresolvedFlags: ['material_uncertain'] }),
+    )
+    vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(
+      makeUpdatedMemoryItem({ unresolvedFlags: [] }),
+    )
+
+    const res = await app.inject({
+      method: 'POST', url: VERIFY_URL,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { unresolvedFlags: [] } }),
+    )
+    expect(res.json().uncertaintyFlags).toEqual([])
+  })
+
+  it('returns normalized shape with source linkage', async () => {
+    const res = await app.inject({
+      method: 'POST', url: VERIFY_URL,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.id).toBe(MEMORY_ID)
+    expect(body.memoryType).toBe('ordered_material')
+    expect(body.source).not.toBeNull()
+    expect(body.source.candidateFactId).toBe(FACT_ID)
+  })
+
+  it('does not mutate candidateFact', async () => {
+    const { prisma } = await import('../src/db/client.js')
+
+    await app.inject({
+      method: 'POST', url: VERIFY_URL,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(prisma.candidateFact.findMany).not.toHaveBeenCalled()
   })
 })

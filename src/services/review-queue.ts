@@ -108,8 +108,8 @@ export interface CorrectedFields {
 }
 
 export type QueueDecisionPayload =
-  | { action: 'confirm'; queueItemId: string }
-  | { action: 'correct'; queueItemId: string; corrected: CorrectedFields }
+  | { action: 'confirm'; queueItemId: string; uncertaintyResolution?: 'resolved' | 'still_unsure' }
+  | { action: 'correct'; queueItemId: string; corrected: CorrectedFields; uncertaintyResolution?: 'resolved' | 'still_unsure' }
   | { action: 'dismiss'; queueItemId: string; reason?: string }
 
 // ── Grouping helpers ──────────────────────────────────────────────────────────
@@ -410,7 +410,8 @@ export async function getReviewQueue(jobId: string, userId: string) {
     costCurrency: m.costCurrency,
     costQualifier: m.costQualifier,
     totalCostAmount: m.totalCostAmount,
-    uncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
+    uncertaintyFlags: m.unresolvedFlags,
+    sourceUncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
   }))
 
   return { jobId, generatedAt: now, sections, alreadyRemembered }
@@ -445,6 +446,9 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   const sourceCandidateFactIds = item.sourceCandidateFactIds
 
   if (payload.action === 'confirm') {
+    const unresolvedFlags =
+      payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
+
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'confirmed' } })
 
@@ -476,6 +480,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costCurrency: pm.costCurrency,
           costQualifier: pm.costQualifier,
           totalCostAmount: pm.totalCostAmount,
+          unresolvedFlags,
         },
       })
 
@@ -499,6 +504,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   if (payload.action === 'correct') {
     const { corrected } = payload
     const memoryType = (corrected.memoryType.toUpperCase()) as never
+    const unresolvedFlags =
+      payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })
@@ -531,6 +538,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costCurrency: corrected.costCurrency ?? null,
           costQualifier: corrected.costQualifier ?? null,
           totalCostAmount: corrected.totalCostAmount ?? null,
+          unresolvedFlags,
         },
       })
 

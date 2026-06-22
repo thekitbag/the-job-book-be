@@ -20,6 +20,7 @@ export interface MemoryItemPatch {
   costCurrency?: string | null
   costQualifier?: string | null
   totalCostAmount?: string | null
+  uncertaintyResolution?: 'resolved' | 'still_unsure'
 }
 
 export async function patchMemoryItem(
@@ -34,6 +35,9 @@ export async function patchMemoryItem(
     where: { id: memoryItemId, jobId },
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  const unresolvedFlags =
+    patch.uncertaintyResolution === 'resolved' ? [] : existing.unresolvedFlags
 
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
@@ -50,6 +54,7 @@ export async function patchMemoryItem(
       costCurrency: 'costCurrency' in patch ? patch.costCurrency ?? null : existing.costCurrency,
       costQualifier: 'costQualifier' in patch ? patch.costQualifier ?? null : existing.costQualifier,
       totalCostAmount: 'totalCostAmount' in patch ? patch.totalCostAmount ?? null : existing.totalCostAmount,
+      unresolvedFlags,
     },
     include: {
       sourceFact: {
@@ -62,25 +67,82 @@ export async function patchMemoryItem(
   })
 
   const fact = updated.sourceFact ?? null
+  return normalizeMemoryItem(updated, fact)
+}
+
+export async function verifyMemoryItem(jobId: string, memoryItemId: string, userId: string) {
+  await verifyJobOwnership(jobId, userId)
+
+  const existing = await prisma.memoryItem.findFirst({ where: { id: memoryItemId, jobId } })
+  if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  const updated = await prisma.memoryItem.update({
+    where: { id: memoryItemId },
+    data: { unresolvedFlags: [] },
+    include: {
+      sourceFact: {
+        include: {
+          sourceNote: { select: { id: true, capturedAt: true } },
+          transcript: { select: { id: true, text: true } },
+        },
+      },
+    },
+  })
+
+  const fact = updated.sourceFact ?? null
+  return normalizeMemoryItem(updated, fact)
+}
+
+function normalizeMemoryItem(
+  item: {
+    id: string
+    memoryType: string
+    summary: string
+    materialName: string | null
+    quantity: string | null
+    unit: string | null
+    supplierName: string | null
+    deliveryTiming: string | null
+    locationOrUse: string | null
+    costAmount: string | null
+    costCurrency: string | null
+    costQualifier: string | null
+    totalCostAmount: string | null
+    unresolvedFlags: string[]
+    sourceCandidateFactId: string | null
+    reviewDecisionId: string
+    createdAt: Date
+    updatedAt: Date
+  },
+  fact: {
+    id: string
+    sourceNoteId: string
+    sourceTranscriptId: string
+    uncertaintyFlags: string[]
+    sourceNote: { id: string; capturedAt: Date }
+    transcript: { id: string; text: string | null } | null
+  } | null,
+) {
   return {
-    id: updated.id,
-    memoryType: (updated.memoryType as string).toLowerCase(),
-    summary: updated.summary,
-    materialName: updated.materialName,
-    quantity: updated.quantity,
-    unit: updated.unit,
-    supplierName: updated.supplierName,
-    deliveryTiming: updated.deliveryTiming,
-    locationOrUse: updated.locationOrUse,
-    costAmount: updated.costAmount,
-    costCurrency: updated.costCurrency,
-    costQualifier: updated.costQualifier,
-    totalCostAmount: updated.totalCostAmount,
-    uncertaintyFlags: fact?.uncertaintyFlags ?? [],
-    sourceCandidateFactId: updated.sourceCandidateFactId,
-    reviewDecisionId: updated.reviewDecisionId,
-    createdAt: updated.createdAt,
-    updatedAt: updated.updatedAt,
+    id: item.id,
+    memoryType: (item.memoryType as string).toLowerCase(),
+    summary: item.summary,
+    materialName: item.materialName,
+    quantity: item.quantity,
+    unit: item.unit,
+    supplierName: item.supplierName,
+    deliveryTiming: item.deliveryTiming,
+    locationOrUse: item.locationOrUse,
+    costAmount: item.costAmount,
+    costCurrency: item.costCurrency,
+    costQualifier: item.costQualifier,
+    totalCostAmount: item.totalCostAmount,
+    uncertaintyFlags: item.unresolvedFlags,
+    sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
+    sourceCandidateFactId: item.sourceCandidateFactId,
+    reviewDecisionId: item.reviewDecisionId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     source: fact
       ? {
           candidateFactId: fact.id,

@@ -259,6 +259,7 @@ model MemoryItem {
   costCurrency          String?
   costQualifier         String?
   totalCostAmount       String?
+  unresolvedFlags       String[] @default([])
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
