@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
+import { formatUnitCostLabel, formatLineTotalLabel } from '../lib/cost-utils.js'
 
 // ── Section configuration ─────────────────────────────────────────────────────
 
@@ -410,6 +411,8 @@ export async function getReviewQueue(jobId: string, userId: string) {
     costCurrency: m.costCurrency,
     costQualifier: m.costQualifier,
     totalCostAmount: m.totalCostAmount,
+    unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
+    lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
     uncertaintyFlags: m.unresolvedFlags,
     sourceUncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
   }))

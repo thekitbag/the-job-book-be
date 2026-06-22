@@ -1,6 +1,12 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import { buildFreshQueueSections } from './review-queue.js'
+import {
+  STRICT_DECIMAL_RE as COST_DECIMAL_RE,
+  strictParsePositive,
+  formatUnitCostLabel,
+  formatLineTotalLabel,
+} from '../lib/cost-utils.js'
 
 const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
   ORDERED_MATERIAL: 'ordered_materials',
@@ -96,6 +102,188 @@ function consolidateSummaryRows(rows: SummaryRow[]): SummaryRow[] {
   return result
 }
 
+// ── Cost summary ─────────────────────────────────────────────────────────────
+
+interface CostRow {
+  key: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  lineTotalAmount: string
+  lineTotalCurrency: string
+  lineTotalLabel: string
+  memoryItemIds: string[]
+}
+
+interface OrderedMaterialsCostSummary {
+  knownSpendAmount: string | null
+  knownSpendCurrency: string | null
+  knownSpendLabel: string | null
+  includedMemoryItemIds: string[]
+  missingCostCount: number
+  uncertainCostCount: number
+  excludedMemoryItemIds: string[]
+  rows: CostRow[]
+}
+
+type IncludedItem = {
+  id: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  totalCostAmount: string
+  costCurrency: string
+}
+
+function buildCostRows(items: IncludedItem[]): CostRow[] {
+  const groups = new Map<string, IncludedItem[]>()
+
+  for (const item of items) {
+    if (!item.unit || !item.materialName) {
+      groups.set(`id:${item.id}`, [item])
+    } else {
+      const key = `${item.materialName.toLowerCase()}|${item.unit.toLowerCase()}`
+      const group = groups.get(key)
+      if (group) group.push(item)
+      else groups.set(key, [item])
+    }
+  }
+
+  const rows: CostRow[] = []
+
+  for (const [groupKey, group] of groups) {
+    const first = group[0]
+    if (group.length === 1) {
+      const key = first.materialName && first.unit
+        ? `${first.materialName.toLowerCase()}|${first.unit.toLowerCase()}`
+        : `id:${first.id}`
+      rows.push({
+        key,
+        materialName: first.materialName,
+        quantity: first.quantity,
+        unit: first.unit,
+        lineTotalAmount: first.totalCostAmount,
+        lineTotalCurrency: first.costCurrency,
+        lineTotalLabel: formatLineTotalLabel(first.totalCostAmount, first.costCurrency) ?? `${first.totalCostAmount} total`,
+        memoryItemIds: [first.id],
+      })
+    } else {
+      const allNumericQty = group.every(
+        (i) => i.quantity != null && COST_DECIMAL_RE.test(i.quantity),
+      )
+      const allNumericTotal = group.every((i) => COST_DECIMAL_RE.test(i.totalCostAmount))
+
+      if (allNumericQty && allNumericTotal) {
+        const sumQty = group.reduce((s, i) => s + parseFloat(i.quantity!), 0)
+        const sumAmt = group.reduce((s, i) => s + parseFloat(i.totalCostAmount), 0)
+        const roundedQty = String(Math.round(sumQty * 1000) / 1000)
+        const roundedAmt = String(Math.round(sumAmt * 100) / 100)
+        rows.push({
+          key: groupKey,
+          materialName: first.materialName,
+          quantity: roundedQty,
+          unit: first.unit,
+          lineTotalAmount: roundedAmt,
+          lineTotalCurrency: first.costCurrency,
+          lineTotalLabel: formatLineTotalLabel(roundedAmt, first.costCurrency) ?? `${roundedAmt} total`,
+          memoryItemIds: group.map((i) => i.id),
+        })
+      } else {
+        for (const item of group) {
+          rows.push({
+            key: `id:${item.id}`,
+            materialName: item.materialName,
+            quantity: item.quantity,
+            unit: item.unit,
+            lineTotalAmount: item.totalCostAmount,
+            lineTotalCurrency: item.costCurrency,
+            lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency) ?? `${item.totalCostAmount} total`,
+            memoryItemIds: [item.id],
+          })
+        }
+      }
+    }
+  }
+  return rows
+}
+
+function buildOrderedMaterialsCostSummary(
+  items: Array<{
+    id: string
+    materialName: string | null
+    quantity: string | null
+    unit: string | null
+    costAmount: string | null
+    costCurrency: string | null
+    totalCostAmount: string | null
+    unresolvedFlags: string[]
+  }>,
+): OrderedMaterialsCostSummary {
+  const includedItems: IncludedItem[] = []
+  const missingCostIds: string[] = []
+  const uncertainCostIds: string[] = []
+
+  for (const m of items) {
+    if (m.unresolvedFlags.length > 0) {
+      uncertainCostIds.push(m.id)
+      continue
+    }
+    if (!m.totalCostAmount) {
+      if (!m.costAmount) {
+        missingCostIds.push(m.id)
+      } else {
+        uncertainCostIds.push(m.id)
+      }
+      continue
+    }
+    if (!m.costCurrency) {
+      uncertainCostIds.push(m.id)
+      continue
+    }
+    includedItems.push({
+      id: m.id,
+      materialName: m.materialName,
+      quantity: m.quantity,
+      unit: m.unit,
+      totalCostAmount: m.totalCostAmount,
+      costCurrency: m.costCurrency,
+    })
+  }
+
+  const gbpItems = includedItems.filter((i) => i.costCurrency === 'GBP')
+  const otherItems = includedItems.filter((i) => i.costCurrency !== 'GBP')
+
+  const includedIds = gbpItems.map((i) => i.id)
+  const excludedIds = [
+    ...missingCostIds,
+    ...uncertainCostIds,
+    ...otherItems.map((i) => i.id),
+  ]
+
+  let knownSpendAmount: string | null = null
+  let knownSpendLabel: string | null = null
+
+  if (gbpItems.length > 0) {
+    const total = gbpItems.reduce((sum, i) => {
+      const amt = strictParsePositive(i.totalCostAmount)
+      return sum + (amt ?? 0)
+    }, 0)
+    knownSpendAmount = String(Math.round(total * 100) / 100)
+    knownSpendLabel = `£${knownSpendAmount} known spend`
+  }
+
+  return {
+    knownSpendAmount,
+    knownSpendCurrency: gbpItems.length > 0 ? 'GBP' : null,
+    knownSpendLabel,
+    includedMemoryItemIds: includedIds,
+    missingCostCount: missingCostIds.length,
+    uncertainCostCount: uncertainCostIds.length + otherItems.length,
+    excludedMemoryItemIds: excludedIds,
+    rows: buildCostRows(gbpItems),
+  }
+}
+
 const SECTION_CONFIG = [
   { key: 'ordered_materials', label: 'Ordered materials' },
   { key: 'used_materials', label: 'Used materials' },
@@ -164,6 +352,8 @@ export async function getMemoryView(jobId: string, userId: string) {
         costCurrency: m.costCurrency,
         costQualifier: m.costQualifier,
         totalCostAmount: m.totalCostAmount,
+        unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
+        lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
         uncertaintyFlags: m.unresolvedFlags,
         sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
         sourceCandidateFactId: m.sourceCandidateFactId,
@@ -209,6 +399,10 @@ export async function getMemoryView(jobId: string, userId: string) {
     return { key, label: SUMMARY_SECTION_LABELS[key], items: consolidateSummaryRows(rawRows) }
   })
 
+  const costSummary = {
+    orderedMaterials: buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? []),
+  }
+
   return {
     job: {
       id: job.id,
@@ -222,6 +416,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     generatedAt: new Date().toISOString(),
     sections,
     summarySections,
+    costSummary,
     stillToCheck: {
       count: stillToCheckItems.length,
       items: stillToCheckItems,

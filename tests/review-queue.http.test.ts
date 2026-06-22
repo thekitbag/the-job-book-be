@@ -469,6 +469,26 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(item.sourceUncertaintyFlags).toEqual(['material_uncertain'])
   })
 
+  it('alreadyRemembered includes unitCostLabel and lineTotalLabel', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
+      makeMemoryItem({
+        costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40',
+        unresolvedFlags: [], sourceFact: null,
+      }),
+    ])
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}/review-queue`,
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    const item = res.json().alreadyRemembered[0]
+    expect(item.unitCostLabel).toBe('£5 each')
+    expect(item.lineTotalLabel).toBe('£40 total')
+  })
+
   it('item ID is stable: createMany receives the same deterministic ID on consecutive GETs', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
