@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js'
 import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
+import { strictParsePositive, deriveSafeLineTotal, hasCostConflict } from '../lib/cost-utils.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -10,45 +11,19 @@ function toDbConfidence(cl: string): string {
   return cl.toUpperCase()
 }
 
-// Only strings that are purely numeric (no units, no approximations, no partial text).
-const STRICT_DECIMAL_RE = /^\d+(\.\d+)?$/
-
-function strictParsePositive(s: string | null | undefined): number | null {
-  if (!s || !STRICT_DECIMAL_RE.test(s)) return null
-  const n = parseFloat(s)
-  return n > 0 ? n : null
-}
-
-// Derive totalCostAmount only when qualifier is "each" and both quantity and
-// costAmount are unambiguous numerics. Returns undefined (not null) to leave
-// the field unchanged when derivation is not safe.
+// Preserve an explicit totalCostAmount from the provider, or derive one when
+// qualifier is "each" and both fields are unambiguous numerics. Returns undefined
+// (not null) so the field stays unset when derivation is not safe.
 function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
   if (fact.totalCostAmount) return fact.totalCostAmount
-  if (fact.costQualifier !== 'each') return undefined
-  const qty = strictParsePositive(fact.quantity)
-  const cost = strictParsePositive(fact.costAmount)
-  if (qty === null || cost === null) return undefined
-  const total = Math.round(qty * cost * 100) / 100
-  return String(total)
-}
-
-// When the provider supplies an explicit totalCostAmount that disagrees with
-// quantity × costAmount (both strict numerics, qualifier "each"), the conflict
-// is unresolvable without the pilot's input — mark the fact as cost_uncertain.
-function detectCostConflict(fact: CandidateFactDraft): boolean {
-  if (fact.costQualifier !== 'each') return false
-  if (!fact.totalCostAmount) return false
-  const qty = strictParsePositive(fact.quantity)
-  const cost = strictParsePositive(fact.costAmount)
-  const total = strictParsePositive(fact.totalCostAmount)
-  if (qty === null || cost === null || total === null) return false
-  const derived = Math.round(qty * cost * 100) / 100
-  return Math.abs(derived - total) > 0.001
+  const derived = deriveSafeLineTotal(fact.quantity, fact.costAmount, fact.costQualifier)
+  return derived ?? undefined
 }
 
 function resolveUncertaintyFlags(fact: CandidateFactDraft): string[] {
   const flags = fact.uncertaintyFlags ?? []
-  if (detectCostConflict(fact) && !flags.includes('cost_uncertain')) {
+  if (hasCostConflict(fact.quantity, fact.costAmount, fact.costQualifier, fact.totalCostAmount) &&
+      !flags.includes('cost_uncertain')) {
     return [...flags, 'cost_uncertain']
   }
   return flags

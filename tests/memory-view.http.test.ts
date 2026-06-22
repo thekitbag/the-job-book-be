@@ -367,7 +367,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
 describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections', () => {
   const headers = { 'x-pilot-user-id': USER_ID }
 
-  it('includes cost fields in section items', async () => {
+  it('includes cost fields and labels in section items', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       makeMemoryItem({ costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
@@ -381,6 +381,8 @@ describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections',
     expect(ordered?.items[0].costCurrency).toBe('GBP')
     expect(ordered?.items[0].costQualifier).toBe('each')
     expect(ordered?.items[0].totalCostAmount).toBe('40')
+    expect(ordered?.items[0].unitCostLabel).toBe('£5 each')
+    expect(ordered?.items[0].lineTotalLabel).toBe('£40 total')
   })
 
   it('includes summarySections with correct keys and labels', async () => {
@@ -719,5 +721,289 @@ describe('GET /api/jobs/:jobId/memory-view — summarySections consolidation', (
     const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
     expect(ordered?.items).toHaveLength(1)
     expect(ordered?.items[0].quantity).toBe('12')
+  })
+})
+
+// ── costSummary ───────────────────────────────────────────────────────────────
+
+describe('GET /api/jobs/:jobId/memory-view — costSummary', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+  const MEMORY_ID_2 = 'mv-memory-2'
+  const MEMORY_ID_3 = 'mv-memory-3'
+
+  it('returns costSummary with orderedMaterials key', async () => {
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: unknown } }>()
+    expect(body.costSummary).toBeDefined()
+    expect(body.costSummary.orderedMaterials).toBeDefined()
+  })
+
+  it('includes a trusted ordered-material item with totalCostAmount and GBP in known spend', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        totalCostAmount: '40',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBe('40')
+    expect(om.knownSpendCurrency).toBe('GBP')
+    expect(om.knownSpendLabel).toBe('£40 known spend')
+    expect(om.includedMemoryItemIds).toEqual([MEMORY_ID])
+    expect(om.missingCostCount).toBe(0)
+    expect(om.uncertainCostCount).toBe(0)
+    expect(om.excludedMemoryItemIds).toEqual([])
+  })
+
+  it('sums GBP line totals from multiple trusted items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, totalCostAmount: '40', costCurrency: 'GBP', unresolvedFlags: [] }),
+      makeMemoryItem({ id: MEMORY_ID_2, memoryType: 'ORDERED_MATERIAL', totalCostAmount: '60', costCurrency: 'GBP', unresolvedFlags: [] }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBe('100')
+    expect(om.knownSpendLabel).toBe('£100 known spend')
+  })
+
+  it('excludes item with unresolved flags from known spend as uncertainCost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        totalCostAmount: '40',
+        costCurrency: 'GBP',
+        unresolvedFlags: ['cost_uncertain'],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.includedMemoryItemIds).toEqual([])
+    expect(om.uncertainCostCount).toBe(1)
+    expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID)
+  })
+
+  it('counts item with no costAmount or totalCostAmount as missingCost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, costAmount: null, totalCostAmount: null, unresolvedFlags: [] }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.missingCostCount).toBe(1)
+    expect(om.uncertainCostCount).toBe(0)
+  })
+
+  it('counts item with costAmount but no totalCostAmount as uncertainCost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, costAmount: '5', totalCostAmount: null, costQualifier: 'approx', unresolvedFlags: [] }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.missingCostCount).toBe(0)
+    expect(om.uncertainCostCount).toBe(1)
+  })
+
+  it('excludes non-ordered-material memory types from costSummary', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        memoryType: 'USED_MATERIAL',
+        totalCostAmount: '100',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.includedMemoryItemIds).toEqual([])
+    expect(om.missingCostCount).toBe(0)
+  })
+
+  it('returns knownSpendAmount:null when no trusted ordered-material items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.knownSpendLabel).toBeNull()
+    expect(om.rows).toEqual([])
+  })
+
+  it('rows include a single trusted item as a row with lineTotalLabel', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: 'plasterboard',
+        quantity: '12',
+        unit: 'sheets',
+        totalCostAmount: '600',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: { rows: Array<Record<string, unknown>> } } }>()
+    const rows = body.costSummary.orderedMaterials.rows
+    expect(rows).toHaveLength(1)
+    expect(rows[0].key).toBe('plasterboard|sheets')
+    expect(rows[0].materialName).toBe('plasterboard')
+    expect(rows[0].quantity).toBe('12')
+    expect(rows[0].unit).toBe('sheets')
+    expect(rows[0].lineTotalAmount).toBe('600')
+    expect(rows[0].lineTotalCurrency).toBe('GBP')
+    expect(rows[0].lineTotalLabel).toBe('£600 total')
+    expect(rows[0].memoryItemIds).toEqual([MEMORY_ID])
+  })
+
+  it('rows consolidate two like-for-like trusted items (same material + unit)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: 'hardcore',
+        quantity: '8',
+        unit: 'bags',
+        totalCostAmount: '40',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: 'bags',
+        totalCostAmount: '20',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: { rows: Array<Record<string, unknown>>; knownSpendAmount: string } } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.rows).toHaveLength(1)
+    expect(om.rows[0].quantity).toBe('12')
+    expect(om.rows[0].lineTotalAmount).toBe('60')
+    expect(om.rows[0].lineTotalLabel).toBe('£60 total')
+    expect((om.rows[0].memoryItemIds as string[])).toHaveLength(2)
+    expect(om.knownSpendAmount).toBe('60')
+  })
+
+  it('rows do not consolidate items with different units', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: 'plasterboard',
+        quantity: '8',
+        unit: 'bags',
+        totalCostAmount: '40',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'plasterboard',
+        quantity: '4',
+        unit: 'sheets',
+        totalCostAmount: '80',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: { rows: Array<Record<string, unknown>> } } }>()
+    expect(body.costSummary.orderedMaterials.rows).toHaveLength(2)
+  })
+
+  it('rows do not consolidate when unit is null', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: 'hardcore',
+        quantity: '8',
+        unit: null,
+        totalCostAmount: '40',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+      makeMemoryItem({
+        id: MEMORY_ID_2,
+        memoryType: 'ORDERED_MATERIAL',
+        materialName: 'hardcore',
+        quantity: '4',
+        unit: null,
+        totalCostAmount: '20',
+        costCurrency: 'GBP',
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: { rows: Array<Record<string, unknown>> } } }>()
+    expect(body.costSummary.orderedMaterials.rows).toHaveLength(2)
+  })
+
+  it('separate the known spend total from an item with missing cost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, totalCostAmount: '40', costCurrency: 'GBP', unresolvedFlags: [] }),
+      makeMemoryItem({ id: MEMORY_ID_2, memoryType: 'ORDERED_MATERIAL', totalCostAmount: null, costAmount: null, unresolvedFlags: [] }),
+      makeMemoryItem({ id: MEMORY_ID_3, memoryType: 'ORDERED_MATERIAL', totalCostAmount: '30', costCurrency: 'GBP', unresolvedFlags: ['cost_uncertain'] }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ costSummary: { orderedMaterials: Record<string, unknown> } }>()
+    const om = body.costSummary.orderedMaterials
+    expect(om.knownSpendAmount).toBe('40')
+    expect(om.missingCostCount).toBe(1)
+    expect(om.uncertainCostCount).toBe(1)
+    expect((om.includedMemoryItemIds as string[])).toEqual([MEMORY_ID])
+    expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID_2)
+    expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID_3)
   })
 })

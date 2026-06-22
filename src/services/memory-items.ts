@@ -1,5 +1,11 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
+import {
+  deriveSafeLineTotal,
+  hasCostConflict,
+  formatUnitCostLabel,
+  formatLineTotalLabel,
+} from '../lib/cost-utils.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -36,8 +42,30 @@ export async function patchMemoryItem(
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
-  const unresolvedFlags =
-    patch.uncertaintyResolution === 'resolved' ? [] : existing.unresolvedFlags
+  // Effective cost fields after merging patch with existing
+  const effQty = 'quantity' in patch ? (patch.quantity ?? null) : existing.quantity
+  const effCostAmount = 'costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount
+  const effCostCurrency = 'costCurrency' in patch ? (patch.costCurrency ?? null) : existing.costCurrency
+  const effCostQualifier = 'costQualifier' in patch ? (patch.costQualifier ?? null) : existing.costQualifier
+
+  // Re-derive safe line total from effective fields
+  const derived = deriveSafeLineTotal(effQty, effCostAmount, effCostQualifier)
+
+  // Explicit patch value wins; otherwise use derived or preserve existing
+  const explicitTotalInPatch = 'totalCostAmount' in patch
+  const finalTotalCostAmount = explicitTotalInPatch
+    ? (patch.totalCostAmount ?? null)
+    : (derived !== null ? derived : existing.totalCostAmount)
+
+  // Recompute cost_uncertain based on final effective data
+  const conflict = hasCostConflict(effQty, effCostAmount, effCostQualifier, finalTotalCostAmount)
+  let baseFlags = existing.unresolvedFlags
+  if (conflict && !baseFlags.includes('cost_uncertain')) {
+    baseFlags = [...baseFlags, 'cost_uncertain']
+  } else if (!conflict) {
+    baseFlags = baseFlags.filter((f) => f !== 'cost_uncertain')
+  }
+  const unresolvedFlags = patch.uncertaintyResolution === 'resolved' ? [] : baseFlags
 
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
@@ -53,7 +81,7 @@ export async function patchMemoryItem(
       costAmount: 'costAmount' in patch ? patch.costAmount ?? null : existing.costAmount,
       costCurrency: 'costCurrency' in patch ? patch.costCurrency ?? null : existing.costCurrency,
       costQualifier: 'costQualifier' in patch ? patch.costQualifier ?? null : existing.costQualifier,
-      totalCostAmount: 'totalCostAmount' in patch ? patch.totalCostAmount ?? null : existing.totalCostAmount,
+      totalCostAmount: finalTotalCostAmount,
       unresolvedFlags,
     },
     include: {
@@ -137,6 +165,8 @@ function normalizeMemoryItem(
     costCurrency: item.costCurrency,
     costQualifier: item.costQualifier,
     totalCostAmount: item.totalCostAmount,
+    unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
+    lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),
     uncertaintyFlags: item.unresolvedFlags,
     sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
     sourceCandidateFactId: item.sourceCandidateFactId,

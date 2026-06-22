@@ -533,3 +533,160 @@ describe('POST /api/jobs/:jobId/memory-items/:memoryItemId/verify', () => {
     expect(prisma.candidateFact.findMany).not.toHaveBeenCalled()
   })
 })
+
+// ── PATCH cost recalculation ──────────────────────────────────────────────────
+
+describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculation', () => {
+  it('auto-derives totalCostAmount from quantity × costAmount when qualifier is each', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: null }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '40' }) }),
+    )
+  })
+
+  it('re-derives when quantity is updated', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40' }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', quantity: '10' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '50' }) }),
+    )
+  })
+
+  it('explicit totalCostAmount in patch is used when provided', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: null }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', totalCostAmount: '45' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '45' }) }),
+    )
+  })
+
+  it('adds cost_uncertain when explicit total conflicts with derived amount', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', unresolvedFlags: [] }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', totalCostAmount: '45' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unresolvedFlags: expect.arrayContaining(['cost_uncertain']) }),
+      }),
+    )
+  })
+
+  it('removes cost_uncertain when derived total now matches stored total', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({
+        quantity: '8', costAmount: '5', costCurrency: 'GBP', costQualifier: 'each',
+        totalCostAmount: '45', unresolvedFlags: ['cost_uncertain'],
+      }),
+    )
+
+    // Patch corrects the quantity so derived = explicit
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', quantity: '9', totalCostAmount: '45' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ unresolvedFlags: [] }),
+      }),
+    )
+  })
+
+  it('does not derive when qualifier is not each', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({
+        quantity: '1', costAmount: '600', costCurrency: 'GBP',
+        costQualifier: 'total', totalCostAmount: null,
+      }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: null }) }),
+    )
+  })
+})
+
+// ── PATCH response labels ─────────────────────────────────────────────────────
+
+describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — response labels', () => {
+  it('includes unitCostLabel and lineTotalLabel in response', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(
+      makeUpdatedMemoryItem({
+        costAmount: '5', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '40', unresolvedFlags: [],
+      }),
+    )
+
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(res.json().unitCostLabel).toBe('£5 each')
+    expect(res.json().lineTotalLabel).toBe('£40 total')
+  })
+
+  it('unitCostLabel is null when qualifier is not each', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(
+      makeUpdatedMemoryItem({
+        costAmount: '600', costCurrency: 'GBP', costQualifier: 'total', totalCostAmount: '600', unresolvedFlags: [],
+      }),
+    )
+
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material' },
+    })
+
+    expect(res.json().unitCostLabel).toBeNull()
+    expect(res.json().lineTotalLabel).toBe('£600 total')
+  })
+})
