@@ -1143,6 +1143,25 @@ describe('GET /api/jobs/:jobId/memory-view — costSummary.excludedRows', () => 
     expect(om.excludedRows[0].materialName).toBeNull()
   })
 
+  it('uses a safe generic itemLabel when both materialName and summary are blank/whitespace', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: '   ',
+        summary: '  \t  ',
+        costAmount: null,
+        totalCostAmount: null,
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0].itemLabel).toBe('Bought item')
+    expect((om.excludedRows[0].itemLabel as string).trim().length).toBeGreaterThan(0)
+  })
+
   it('excludes non-ordered-material memory types from excludedRows', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([

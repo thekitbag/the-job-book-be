@@ -139,10 +139,14 @@ interface OrderedMaterialsCostSummary {
 }
 
 // itemLabel must be non-empty: prefer trimmed materialName, fall back to the
-// memory item's existing summary. Never synthesize an anonymous label.
+// trimmed memory item summary. Only when both are blank do we use a safe
+// generic label rather than emitting an empty string.
 function resolveItemLabel(materialName: string | null, summary: string): string {
-  const trimmed = materialName?.trim()
-  return trimmed ? trimmed : summary
+  const trimmedName = materialName?.trim()
+  if (trimmedName) return trimmedName
+  const trimmedSummary = summary?.trim()
+  if (trimmedSummary) return trimmedSummary
+  return 'Bought item'
 }
 
 type IncludedItem = {
