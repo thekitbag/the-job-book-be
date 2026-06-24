@@ -1030,3 +1030,179 @@ describe('GET /api/jobs/:jobId/memory-view — costSummary', () => {
     expect((om.excludedMemoryItemIds as string[])).toContain(MEMORY_ID_3)
   })
 })
+
+// ── costSummary.orderedMaterials.excludedRows ─────────────────────────────────
+
+type ExcludedRow = {
+  memoryItemId: string
+  itemLabel: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  reason: 'no_cost_remembered' | 'cost_worth_checking'
+}
+
+type OrderedMaterials = {
+  knownSpendAmount: string | null
+  includedMemoryItemIds: string[]
+  missingCostCount: number
+  uncertainCostCount: number
+  excludedMemoryItemIds: string[]
+  rows: Array<{ memoryItemIds: string[] }>
+  excludedRows: ExcludedRow[]
+}
+
+describe('GET /api/jobs/:jobId/memory-view — costSummary.excludedRows', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+  const MEMORY_ID_2 = 'mv-memory-2'
+  const MEMORY_ID_3 = 'mv-memory-3'
+
+  async function getOrderedMaterials(): Promise<OrderedMaterials> {
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+    return res.json<{ costSummary: { orderedMaterials: OrderedMaterials } }>()
+      .costSummary.orderedMaterials
+  }
+
+  it('keeps an included trusted item out of excludedRows', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, totalCostAmount: '40', costCurrency: 'GBP', unresolvedFlags: [] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toEqual([])
+    expect(om.rows.flatMap((r) => r.memoryItemIds)).toEqual([MEMORY_ID])
+  })
+
+  it('classifies a missing-cost item as no_cost_remembered', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, costAmount: null, totalCostAmount: null, unresolvedFlags: [] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0]).toMatchObject({
+      memoryItemId: MEMORY_ID,
+      reason: 'no_cost_remembered',
+      materialName: 'plasterboard',
+      quantity: '12',
+      unit: 'sheets',
+    })
+  })
+
+  it('classifies an ambiguous-basis item (costAmount, no safe total) as cost_worth_checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, costAmount: '5', totalCostAmount: null, costQualifier: 'approx', unresolvedFlags: [] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0].reason).toBe('cost_worth_checking')
+  })
+
+  it('classifies an unresolved-flag item as cost_worth_checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, totalCostAmount: '40', costCurrency: 'GBP', unresolvedFlags: ['cost_uncertain'] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0].reason).toBe('cost_worth_checking')
+  })
+
+  it('classifies a non-GBP trusted line total as cost_worth_checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, totalCostAmount: '40', costCurrency: 'EUR', unresolvedFlags: [] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.knownSpendAmount).toBeNull()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0].reason).toBe('cost_worth_checking')
+  })
+
+  it('falls back to summary for itemLabel when materialName is absent', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: null,
+        summary: 'Ordered some bits and bobs',
+        costAmount: null,
+        totalCostAmount: null,
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows[0].itemLabel).toBe('Ordered some bits and bobs')
+    expect(om.excludedRows[0].materialName).toBeNull()
+  })
+
+  it('uses a safe generic itemLabel when both materialName and summary are blank/whitespace', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({
+        id: MEMORY_ID,
+        materialName: '   ',
+        summary: '  \t  ',
+        costAmount: null,
+        totalCostAmount: null,
+        unresolvedFlags: [],
+      }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toHaveLength(1)
+    expect(om.excludedRows[0].itemLabel).toBe('Bought item')
+    expect((om.excludedRows[0].itemLabel as string).trim().length).toBeGreaterThan(0)
+  })
+
+  it('excludes non-ordered-material memory types from excludedRows', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ id: MEMORY_ID, memoryType: 'USED_MATERIAL', costAmount: null, totalCostAmount: null, unresolvedFlags: [] }),
+    ])
+
+    const om = await getOrderedMaterials()
+    expect(om.excludedRows).toEqual([])
+  })
+
+  it('holds set and count invariants on a mixed fixture', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      // included GBP line total
+      makeMemoryItem({ id: MEMORY_ID, materialName: 'hardcore', unit: 'bags', totalCostAmount: '404', costCurrency: 'GBP', unresolvedFlags: [] }),
+      // missing cost
+      makeMemoryItem({ id: MEMORY_ID_2, materialName: 'plasterboard', unit: 'sheets', costAmount: null, totalCostAmount: null, unresolvedFlags: [] }),
+      // worth checking (unresolved flag)
+      makeMemoryItem({ id: MEMORY_ID_3, materialName: 'insulation', unit: 'packs', totalCostAmount: '50', costCurrency: 'GBP', unresolvedFlags: ['cost_uncertain'] }),
+    ])
+
+    const om = await getOrderedMaterials()
+
+    // one excluded row per excluded item, with the right reasons
+    const byId = Object.fromEntries(om.excludedRows.map((r) => [r.memoryItemId, r.reason]))
+    expect(byId[MEMORY_ID_2]).toBe('no_cost_remembered')
+    expect(byId[MEMORY_ID_3]).toBe('cost_worth_checking')
+
+    // counts derived from excludedRows
+    expect(om.missingCostCount).toBe(1)
+    expect(om.uncertainCostCount).toBe(1)
+
+    // excludedMemoryItemIds equals the excluded row IDs (order-independent)
+    expect([...om.excludedMemoryItemIds].sort()).toEqual([...om.excludedRows.map((r) => r.memoryItemId)].sort())
+
+    // includedMemoryItemIds equals the flattened included row IDs
+    expect([...om.includedMemoryItemIds].sort()).toEqual([...om.rows.flatMap((r) => r.memoryItemIds)].sort())
+
+    // every trusted item appears exactly once across rows + excludedRows
+    const allIds = [...om.rows.flatMap((r) => r.memoryItemIds), ...om.excludedRows.map((r) => r.memoryItemId)]
+    expect(allIds.sort()).toEqual([MEMORY_ID, MEMORY_ID_2, MEMORY_ID_3].sort())
+    expect(new Set(allIds).size).toBe(allIds.length)
+  })
+})
