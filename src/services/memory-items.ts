@@ -6,6 +6,7 @@ import {
   formatUnitCostLabel,
   formatLineTotalLabel,
 } from '../lib/cost-utils.js'
+import { assertAssignableCategory } from './budget.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -27,6 +28,7 @@ export interface MemoryItemPatch {
   costQualifier?: string | null
   totalCostAmount?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
+  budgetCategoryId?: string | null
 }
 
 export async function patchMemoryItem(
@@ -68,10 +70,23 @@ export async function patchMemoryItem(
   // 'resolved' may not override a freshly detected arithmetic conflict
   const unresolvedFlags = (!conflict && patch.uncertaintyResolution === 'resolved') ? [] : baseFlags
 
+  // Category assignment: undefined preserves, null clears, a string must reference
+  // a non-archived category in this same job.
+  let budgetCategoryId = existing.budgetCategoryId
+  if (patch.budgetCategoryId !== undefined) {
+    if (patch.budgetCategoryId === null) {
+      budgetCategoryId = null
+    } else {
+      await assertAssignableCategory(jobId, patch.budgetCategoryId)
+      budgetCategoryId = patch.budgetCategoryId
+    }
+  }
+
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
     data: {
       memoryType: patch.memoryType.toUpperCase() as never,
+      budgetCategoryId,
       summary: patch.summary ?? existing.summary,
       materialName: 'materialName' in patch ? patch.materialName ?? null : existing.materialName,
       quantity: 'quantity' in patch ? patch.quantity ?? null : existing.quantity,
@@ -138,6 +153,7 @@ function normalizeMemoryItem(
     costQualifier: string | null
     totalCostAmount: string | null
     unresolvedFlags: string[]
+    budgetCategoryId: string | null
     sourceCandidateFactId: string | null
     reviewDecisionId: string
     createdAt: Date
@@ -166,6 +182,7 @@ function normalizeMemoryItem(
     costCurrency: item.costCurrency,
     costQualifier: item.costQualifier,
     totalCostAmount: item.totalCostAmount,
+    budgetCategoryId: item.budgetCategoryId,
     unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
     lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),
     uncertaintyFlags: item.unresolvedFlags,

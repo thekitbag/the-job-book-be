@@ -49,6 +49,8 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.MISSING_FIELD]: 400,
   [ErrorCode.INVALID_FIELD]: 400,
   [ErrorCode.MEMORY_ITEM_NOT_FOUND]: 404,
+  [ErrorCode.BUDGET_CATEGORY_NOT_FOUND]: 404,
+  [ErrorCode.BUDGET_CATEGORY_ARCHIVED]: 400,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {

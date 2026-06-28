@@ -28,6 +28,7 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       costQualifier?: string | null
       totalCostAmount?: string | null
       uncertaintyResolution?: string
+      budgetCategoryId?: string | null
     }
   }>('/api/jobs/:jobId/memory-items/:memoryItemId', async (request, reply) => {
     const { jobId, memoryItemId } = request.params
@@ -54,6 +55,9 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
+    }
+    if ('budgetCategoryId' in body && body.budgetCategoryId !== null && typeof body.budgetCategoryId !== 'string') {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId must be a string or null' })
     }
 
     try {

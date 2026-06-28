@@ -6,6 +6,7 @@ import {
   strictParsePositive,
   formatUnitCostLabel,
   formatLineTotalLabel,
+  resolveSpendItemLabel,
 } from '../lib/cost-utils.js'
 
 const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
@@ -138,16 +139,8 @@ interface OrderedMaterialsCostSummary {
   excludedRows: ExcludedSpendRow[]
 }
 
-// itemLabel must be non-empty: prefer trimmed materialName, fall back to the
-// trimmed memory item summary. Only when both are blank do we use a safe
-// generic label rather than emitting an empty string.
-function resolveItemLabel(materialName: string | null, summary: string): string {
-  const trimmedName = materialName?.trim()
-  if (trimmedName) return trimmedName
-  const trimmedSummary = summary?.trim()
-  if (trimmedSummary) return trimmedSummary
-  return 'Bought item'
-}
+// itemLabel must be non-empty; resolveSpendItemLabel handles the trim/fallback rules.
+const resolveItemLabel = resolveSpendItemLabel
 
 type IncludedItem = {
   id: string
@@ -385,6 +378,7 @@ export async function getMemoryView(jobId: string, userId: string) {
         costCurrency: m.costCurrency,
         costQualifier: m.costQualifier,
         totalCostAmount: m.totalCostAmount,
+        budgetCategoryId: m.budgetCategoryId,
         unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
         lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
         uncertaintyFlags: m.unresolvedFlags,

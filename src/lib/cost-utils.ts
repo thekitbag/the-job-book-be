@@ -7,6 +7,20 @@ export function strictParsePositive(s: string | null | undefined): number | null
   return n > 0 ? n : null
 }
 
+// A non-empty display label for a bought/ordered item: prefer trimmed materialName,
+// fall back to the trimmed memory item summary, and only use a safe generic label
+// when both are blank. Shared by the known-spend and budget summaries.
+export function resolveSpendItemLabel(
+  materialName: string | null | undefined,
+  summary: string | null | undefined,
+): string {
+  const trimmedName = materialName?.trim()
+  if (trimmedName) return trimmedName
+  const trimmedSummary = summary?.trim()
+  if (trimmedSummary) return trimmedSummary
+  return 'Bought item'
+}
+
 // Returns "£5 each" / "EUR 5 each" — only when qualifier is 'each' and currency is present.
 export function formatUnitCostLabel(
   costAmount: string | null | undefined,
