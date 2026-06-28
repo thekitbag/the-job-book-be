@@ -269,6 +269,77 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — budgetCategoryId
     expect(res.statusCode).toBe(200)
     expect(res.json<Record<string, unknown>>().budgetCategoryId).toBeNull()
   })
+
+  // ── Category-only body (no memoryType) ──────────────────────────────────────
+
+  it('assigns a category with a category-only body (no memoryType)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeCategory())
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { budgetCategoryId: CAT_ID } })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<Record<string, unknown>>()
+    expect(body.budgetCategoryId).toBe(CAT_ID)
+    // existing memory fields are left unchanged
+    expect(body.summary).toBe('Ordered timber')
+    expect(body.materialName).toBe('timber')
+    // and only budgetCategoryId is written at the DB layer
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data).toEqual({ budgetCategoryId: CAT_ID })
+  })
+
+  it('clears a category with a category-only body (no memoryType)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeMemory({ budgetCategoryId: CAT_ID }))
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { budgetCategoryId: null } })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<Record<string, unknown>>().budgetCategoryId).toBeNull()
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data).toEqual({ budgetCategoryId: null })
+  })
+
+  it('rejects a category-only assignment to another job\'s category with 404', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { budgetCategoryId: 'other-job-cat' } })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('rejects a category-only assignment to a nonexistent category with 404', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { budgetCategoryId: 'ghost-cat' } })
+    expect(res.statusCode).toBe(404)
+  })
+
+  it('rejects a category-only assignment to an archived category with 400', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeCategory({ isArchived: true }))
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { budgetCategoryId: CAT_ID } })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('rejects an empty body with no memoryType and no budgetCategoryId', async () => {
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: {} })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('still applies a full memory edit when memoryType and fields are submitted', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({
+      method: 'PATCH',
+      url: MI_URL,
+      headers,
+      payload: { memoryType: 'ordered_material', summary: 'Corrected: 2 loads of timber', materialName: 'timber', quantity: '2' },
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<Record<string, unknown>>()
+    expect(body.summary).toBe('Corrected: 2 loads of timber')
+    expect(body.quantity).toBe('2')
+    // full path writes the memory fields, not just budgetCategoryId
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data).toHaveProperty('summary', 'Corrected: 2 loads of timber')
+    expect(call.data).toHaveProperty('memoryType', 'ORDERED_MATERIAL')
+  })
 })
 
 // ── Budget summary ────────────────────────────────────────────────────────────

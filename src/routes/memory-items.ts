@@ -34,11 +34,13 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     const { jobId, memoryItemId } = request.params
     const body = request.body ?? {}
 
-    const missing = (field: string) =>
-      reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: `${field} is required` })
-
-    if (!body.memoryType) return missing('memoryType')
-    if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
+    // A category-only change carries budgetCategoryId and no memoryType; it must
+    // update only the assignment and leave existing memory fields untouched.
+    if (body.memoryType == null) {
+      if (!('budgetCategoryId' in body)) {
+        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType or budgetCategoryId is required' })
+      }
+    } else if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
       return reply.code(400).send({
         code: ErrorCode.INVALID_FIELD,
         message: 'memoryType must be a valid non-unclear memory type',

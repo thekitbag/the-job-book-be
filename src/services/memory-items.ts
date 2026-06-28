@@ -15,7 +15,7 @@ async function verifyJobOwnership(jobId: string, userId: string) {
 }
 
 export interface MemoryItemPatch {
-  memoryType: string
+  memoryType?: string
   summary?: string | null
   materialName?: string | null
   quantity?: string | null
@@ -44,6 +44,36 @@ export async function patchMemoryItem(
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
+  // Category assignment: undefined preserves, null clears, a string must reference
+  // a non-archived category in this same job.
+  let budgetCategoryId = existing.budgetCategoryId
+  if (patch.budgetCategoryId !== undefined) {
+    if (patch.budgetCategoryId === null) {
+      budgetCategoryId = null
+    } else {
+      await assertAssignableCategory(jobId, patch.budgetCategoryId)
+      budgetCategoryId = patch.budgetCategoryId
+    }
+  }
+
+  // Category-only change: no memoryType means update budgetCategoryId alone and
+  // leave every existing memory field untouched.
+  if (patch.memoryType == null) {
+    const updated = await prisma.memoryItem.update({
+      where: { id: memoryItemId },
+      data: { budgetCategoryId },
+      include: {
+        sourceFact: {
+          include: {
+            sourceNote: { select: { id: true, capturedAt: true } },
+            transcript: { select: { id: true, text: true } },
+          },
+        },
+      },
+    })
+    return normalizeMemoryItem(updated, updated.sourceFact ?? null)
+  }
+
   // Effective cost fields after merging patch with existing
   const effQty = 'quantity' in patch ? (patch.quantity ?? null) : existing.quantity
   const effCostAmount = 'costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount
@@ -69,18 +99,6 @@ export async function patchMemoryItem(
   }
   // 'resolved' may not override a freshly detected arithmetic conflict
   const unresolvedFlags = (!conflict && patch.uncertaintyResolution === 'resolved') ? [] : baseFlags
-
-  // Category assignment: undefined preserves, null clears, a string must reference
-  // a non-archived category in this same job.
-  let budgetCategoryId = existing.budgetCategoryId
-  if (patch.budgetCategoryId !== undefined) {
-    if (patch.budgetCategoryId === null) {
-      budgetCategoryId = null
-    } else {
-      await assertAssignableCategory(jobId, patch.budgetCategoryId)
-      budgetCategoryId = patch.budgetCategoryId
-    }
-  }
 
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
