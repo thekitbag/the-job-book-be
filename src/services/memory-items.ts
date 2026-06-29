@@ -44,6 +44,10 @@ export async function patchMemoryItem(
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
+  // The final memory type is the patched one (full edit) or the existing one
+  // (category-only edit). A category may only live on ORDERED_MATERIAL memory.
+  const finalMemoryType = patch.memoryType ? patch.memoryType.toUpperCase() : existing.memoryType
+
   // Category assignment: undefined preserves, null clears, a string must reference
   // a non-archived category in this same job.
   let budgetCategoryId = existing.budgetCategoryId
@@ -51,9 +55,18 @@ export async function patchMemoryItem(
     if (patch.budgetCategoryId === null) {
       budgetCategoryId = null
     } else {
+      if (finalMemoryType !== 'ORDERED_MATERIAL') {
+        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material memory' }
+      }
       await assertAssignableCategory(jobId, patch.budgetCategoryId)
       budgetCategoryId = patch.budgetCategoryId
     }
+  }
+
+  // If the memory type is (or becomes) non-ordered, a preserved category is
+  // cleared so trusted memory never carries a category on the wrong type.
+  if (budgetCategoryId !== null && finalMemoryType !== 'ORDERED_MATERIAL') {
+    budgetCategoryId = null
   }
 
   // Category-only change: no memoryType means update budgetCategoryId alone and

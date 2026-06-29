@@ -34,6 +34,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       queueItemId?: string
       action?: string
       uncertaintyResolution?: string
+      budgetCategoryId?: string | null
       corrected?: {
         memoryType?: string
         summary?: string
@@ -47,6 +48,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         costCurrency?: string | null
         costQualifier?: string | null
         totalCostAmount?: string | null
+        budgetCategoryId?: string | null
       }
       reason?: string
     }
@@ -68,6 +70,14 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
     const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
     if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
+    }
+
+    const isValidCategoryRef = (v: unknown) => v === null || typeof v === 'string'
+    if ('budgetCategoryId' in body && !isValidCategoryRef(body.budgetCategoryId)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId must be a string or null' })
+    }
+    if (body.corrected && 'budgetCategoryId' in body.corrected && !isValidCategoryRef(body.corrected.budgetCategoryId)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.budgetCategoryId must be a string or null' })
     }
 
     if (body.action === 'correct') {
@@ -97,6 +107,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         queueItemId: body.queueItemId,
         action: body.action as 'confirm' | 'correct' | 'dismiss',
         uncertaintyResolution: body.uncertaintyResolution as 'resolved' | 'still_unsure' | undefined,
+        budgetCategoryId: body.budgetCategoryId,
         corrected: body.corrected as never,
         reason: body.reason,
       })
@@ -108,6 +119,9 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       if (e.code === ErrorCode.QUEUE_ITEM_NOT_FOUND) return reply.code(404).send(e)
       if (e.code === ErrorCode.QUEUE_ITEM_ALREADY_DECIDED) return reply.code(409).send(e)
       if (e.code === ErrorCode.QUEUE_ITEM_CONFIRM_NOT_ALLOWED) return reply.code(409).send(e)
+      if (e.code === ErrorCode.BUDGET_CATEGORY_NOT_FOUND) return reply.code(404).send(e)
+      if (e.code === ErrorCode.BUDGET_CATEGORY_ARCHIVED) return reply.code(400).send(e)
+      if (e.code === ErrorCode.INVALID_FIELD) return reply.code(400).send(e)
       throw err
     }
   })

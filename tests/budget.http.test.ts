@@ -26,6 +26,9 @@ vi.mock('../src/db/client.js', () => ({
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    // Needed so memory-view can run alongside budget-summary in the invariant test.
+    candidateFact: { findMany: vi.fn() },
+    queueItem: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
       const { prisma } = await import('../src/db/client.js')
       return fn(prisma)
@@ -117,6 +120,10 @@ beforeEach(async () => {
     async ({ data }: { data: object }) => ({ ...makeMemory(), ...data, sourceFact: null }),
   )
   vi.mocked(prisma.memoryItem.updateMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 })
+  vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+  vi.mocked(prisma.queueItem.deleteMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 })
+  vi.mocked(prisma.queueItem.createMany as ReturnType<typeof vi.fn>).mockResolvedValue({ count: 0 })
+  vi.mocked(prisma.queueItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
 })
 
 const headers = { 'x-pilot-user-id': USER_ID }
@@ -339,6 +346,49 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — budgetCategoryId
     const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
     expect(call.data).toHaveProperty('summary', 'Corrected: 2 loads of timber')
     expect(call.data).toHaveProperty('memoryType', 'ORDERED_MATERIAL')
+  })
+
+  it('rejects assigning a category to a non-ordered memory type with 400', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeCategory())
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { memoryType: 'used_material', summary: 'Used it', budgetCategoryId: CAT_ID } })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('clears an existing category when the memory type changes away from ordered', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeMemory({ budgetCategoryId: CAT_ID }))
+    const res = await app.inject({ method: 'PATCH', url: MI_URL, headers, payload: { memoryType: 'used_material', summary: 'Used the timber' } })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data.budgetCategoryId).toBeNull()
+  })
+})
+
+// ── Cross-summary known-spend invariant ───────────────────────────────────────
+
+describe('budget-summary and memory-view agree on job-level known spend', () => {
+  it('totals.knownSpendAmount equals memory-view costSummary.orderedMaterials.knownSpendAmount', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const mixed = [
+      makeMemory({ id: 'cat', budgetCategoryId: CAT_ID, totalCostAmount: '1850', costCurrency: 'GBP' }),
+      makeMemory({ id: 'unc', budgetCategoryId: null, totalCostAmount: '320', costCurrency: 'GBP' }),
+      makeMemory({ id: 'missing', totalCostAmount: null }),
+      makeMemory({ id: 'unresolved', totalCostAmount: '99', unresolvedFlags: ['cost_uncertain'] }),
+      makeMemory({ id: 'eur', totalCostAmount: '70', costCurrency: 'EUR' }),
+      makeMemory({ id: 'used', memoryType: 'USED_MATERIAL', totalCostAmount: '80', costCurrency: 'GBP' }),
+    ]
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(mixed)
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeCategory({ id: CAT_ID, budgetAmount: '4000', budgetCurrency: 'GBP' })])
+
+    const budgetRes = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const memoryRes = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/memory-view`, headers })
+
+    const budgetTotal = budgetRes.json<{ totals: { knownSpendAmount: string | null } }>().totals.knownSpendAmount
+    const memoryTotal = memoryRes.json<{ costSummary: { orderedMaterials: { knownSpendAmount: string | null } } }>().costSummary.orderedMaterials.knownSpendAmount
+
+    expect(budgetTotal).toBe('2170')
+    expect(budgetTotal).toBe(memoryTotal)
   })
 })
 

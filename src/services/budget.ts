@@ -166,13 +166,15 @@ interface SpendItem {
 }
 
 // A memory item counts toward budget known spend only when it is a trusted
-// ORDERED_MATERIAL with a safe positive GBP line total and no unresolved flags.
+// ORDERED_MATERIAL with a safe GBP line total and no unresolved flags. This is
+// the same inclusion rule memory-view uses for job-level Known spend, so the two
+// summaries always agree (see the spend-summary invariant in the budget spec).
 function isSafeGbpOrderedSpend(item: SpendItem): boolean {
   return (
     item.memoryType === 'ORDERED_MATERIAL' &&
     item.unresolvedFlags.length === 0 &&
     item.costCurrency === 'GBP' &&
-    strictParsePositive(item.totalCostAmount) !== null
+    !!item.totalCostAmount
   )
 }
 
@@ -319,4 +321,59 @@ export async function assertAssignableCategory(jobId: string, categoryId: string
   const category = await prisma.jobBudgetCategory.findFirst({ where: { id: categoryId, jobId } })
   if (!category) throw { code: ErrorCode.BUDGET_CATEGORY_NOT_FOUND, message: 'Budget category not found' }
   if (category.isArchived) throw { code: ErrorCode.BUDGET_CATEGORY_ARCHIVED, message: 'Cannot assign to an archived category' }
+}
+
+// ── Review-time category suggestion (no ownership check; caller verifies) ──────
+
+type NormalizedCategory = ReturnType<typeof normalizeCategory>
+
+export async function getActiveBudgetCategories(jobId: string): Promise<NormalizedCategory[]> {
+  const categories = await prisma.jobBudgetCategory.findMany({
+    where: { jobId, isArchived: false },
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+  })
+  return categories.map(normalizeCategory)
+}
+
+export interface BudgetCategorySuggestion {
+  budgetCategoryId: string
+  categoryName: string
+  reason: 'material_name_match' | 'summary_match'
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Deterministic, strong-evidence-only suggestion for a bought/ordered proposed
+// memory. No fuzzy/substring/supplier/AI matching. A single exact materialName
+// match wins; otherwise a single whole-word/phrase match of a category name in
+// the summary is used. Anything ambiguous yields no suggestion.
+export function suggestBudgetCategory(
+  memoryType: string,
+  materialName: string | null,
+  summary: string | null,
+  categories: NormalizedCategory[],
+): BudgetCategorySuggestion | null {
+  if (memoryType !== 'ordered_material' || categories.length === 0) return null
+
+  const mat = materialName?.trim().toLowerCase()
+  const nameMatches = mat ? categories.filter((c) => c.name.trim().toLowerCase() === mat) : []
+  if (nameMatches.length === 1) {
+    const c = nameMatches[0]
+    return { budgetCategoryId: c.id, categoryName: c.name, reason: 'material_name_match' }
+  }
+  // Two or more exact material-name matches are ambiguous → no suggestion.
+  if (nameMatches.length > 1) return null
+
+  const text = summary ?? ''
+  const summaryMatches = categories.filter((c) => {
+    const name = c.name.trim()
+    return name.length > 0 && new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i').test(text)
+  })
+  if (summaryMatches.length === 1) {
+    const c = summaryMatches[0]
+    return { budgetCategoryId: c.id, categoryName: c.name, reason: 'summary_match' }
+  }
+  return null
 }
