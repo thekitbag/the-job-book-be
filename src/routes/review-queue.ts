@@ -48,6 +48,9 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         costCurrency?: string | null
         costQualifier?: string | null
         totalCostAmount?: string | null
+        labourHours?: string | null
+        labourPerson?: string | null
+        labourTask?: string | null
         budgetCategoryId?: string | null
       }
       reason?: string
@@ -96,9 +99,9 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       if (c.totalCostAmount != null && !isValidDecimalString(c.totalCostAmount)) {
         return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.totalCostAmount must be a decimal string' })
       }
-      const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown'])
+      const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown', 'per_hour'])
       if (c.costQualifier != null && !VALID_QUALIFIERS.has(c.costQualifier)) {
-        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costQualifier must be each, total, approx, or unknown' })
+        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costQualifier must be each, total, per_hour, approx, or unknown' })
       }
     }
 

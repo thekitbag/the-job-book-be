@@ -5,11 +5,12 @@ export type FactType =
   | 'supplier_delivery_note'
   | 'customer_change'
   | 'watch_out'
+  | 'labour'
   | 'unclear'
 
 export type ConfidenceLabel = 'high' | 'medium' | 'low'
 
-export type CostQualifier = 'each' | 'total' | 'approx' | 'unknown'
+export type CostQualifier = 'each' | 'total' | 'approx' | 'unknown' | 'per_hour'
 
 export interface CandidateFactDraft {
   factType: FactType
@@ -24,6 +25,9 @@ export interface CandidateFactDraft {
   costCurrency?: string
   costQualifier?: CostQualifier
   totalCostAmount?: string
+  labourHours?: string
+  labourPerson?: string
+  labourTask?: string
   confidenceLabel: ConfidenceLabel
   confidenceReason: string
   uncertaintyFlags: string[]

@@ -78,6 +78,9 @@ function makeMemory(overrides?: object) {
     costCurrency: 'GBP',
     costQualifier: null,
     totalCostAmount: '1850',
+    labourHours: null as string | null,
+    labourPerson: null as string | null,
+    labourTask: null as string | null,
     unresolvedFlags: [] as string[],
     budgetCategoryId: null as string | null,
     createdAt: new Date('2026-06-28T09:00:00.000Z'),
@@ -367,12 +370,15 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — budgetCategoryId
 
 // ── Cross-summary known-spend invariant ───────────────────────────────────────
 
-describe('budget-summary and memory-view agree on job-level known spend', () => {
-  it('totals.knownSpendAmount equals memory-view costSummary.orderedMaterials.knownSpendAmount', async () => {
+describe('budget-summary and memory-view agree on job-level known cost', () => {
+  it('totals.knownSpendAmount equals memory-view costSummary.totalKnownCost (material + labour)', async () => {
     const { prisma } = await import('../src/db/client.js')
     const mixed = [
       makeMemory({ id: 'cat', budgetCategoryId: CAT_ID, totalCostAmount: '1850', costCurrency: 'GBP' }),
       makeMemory({ id: 'unc', budgetCategoryId: null, totalCostAmount: '320', costCurrency: 'GBP' }),
+      // labour: explicit total contributes; hours-only does not
+      makeMemory({ id: 'lab-paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+      makeMemory({ id: 'lab-hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
       makeMemory({ id: 'missing', totalCostAmount: null }),
       makeMemory({ id: 'unresolved', totalCostAmount: '99', unresolvedFlags: ['cost_uncertain'] }),
       makeMemory({ id: 'eur', totalCostAmount: '70', costCurrency: 'EUR' }),
@@ -385,10 +391,12 @@ describe('budget-summary and memory-view agree on job-level known spend', () => 
     const memoryRes = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/memory-view`, headers })
 
     const budgetTotal = budgetRes.json<{ totals: { knownSpendAmount: string | null } }>().totals.knownSpendAmount
-    const memoryTotal = memoryRes.json<{ costSummary: { orderedMaterials: { knownSpendAmount: string | null } } }>().costSummary.orderedMaterials.knownSpendAmount
+    const memoryView = memoryRes.json<{ costSummary: { orderedMaterials: { knownSpendAmount: string | null }; totalKnownCost: { knownSpendAmount: string | null } } }>().costSummary
 
-    expect(budgetTotal).toBe('2170')
-    expect(budgetTotal).toBe(memoryTotal)
+    expect(budgetTotal).toBe('2450') // 1850 + 320 + 280 labour
+    expect(budgetTotal).toBe(memoryView.totalKnownCost.knownSpendAmount)
+    // ordered-materials-only known spend stays material-only for compatibility
+    expect(memoryView.orderedMaterials.knownSpendAmount).toBe('2170')
   })
 })
 
@@ -519,5 +527,123 @@ describe('GET /api/jobs/:jobId/budget-summary', () => {
     vi.mocked(prisma.job.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(makeJob({ ownerUserId: 'someone-else' }))
     const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
     expect(res.statusCode).toBe(403)
+  })
+})
+
+// ── Labour in budget summary (labour-hours-cost-memory) ───────────────────────
+
+describe('budget-summary — labour', () => {
+  it('includes safe labour monetary rows and excludes hours-only labour', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+      makeMemory({ id: 'hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<SummaryBody>()
+    expect(body.uncategorized.rows.map((r) => r.memoryItemId)).toEqual(['paid'])
+    expect(body.totals.knownSpendAmount).toBe('280')
+  })
+
+  it('row carries memoryType and labour fields', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const row = res.json<{ uncategorized: { rows: Array<Record<string, unknown>> } }>().uncategorized.rows[0]
+    expect(row.memoryType).toBe('labour')
+    expect(row.labourHours).toBe('8')
+    expect(row.labourPerson).toBe('Tom')
+    expect(row.itemLabel).toBe('electrics') // labourTask fallback
+  })
+})
+
+// ── Memory-view labour cost summary ───────────────────────────────────────────
+
+describe('memory-view — labour cost summary', () => {
+  const MV = `/api/jobs/${JOB_ID}/memory-view`
+
+  it('reports included labour, hours-only as no_rate_or_cost, and totalKnownCost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemory({ id: 'ord', totalCostAmount: '100', costCurrency: 'GBP' }),
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'roof', totalCostAmount: '600', costCurrency: 'GBP' }),
+      makeMemory({ id: 'hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
+    ])
+    const res = await app.inject({ method: 'GET', url: MV, headers })
+    const cs = res.json<{ costSummary: {
+      labour: { knownSpendAmount: string | null; rows: Array<{ memoryItemId: string }>; excludedRows: Array<{ memoryItemId: string; reason: string }> }
+      totalKnownCost: { knownSpendAmount: string | null; includedMemoryItemIds: string[] }
+    } }>().costSummary
+
+    expect(cs.labour.knownSpendAmount).toBe('600')
+    expect(cs.labour.rows.map((r) => r.memoryItemId)).toEqual(['paid'])
+    expect(cs.labour.excludedRows).toEqual([
+      expect.objectContaining({ memoryItemId: 'hours', reason: 'no_rate_or_cost' }),
+    ])
+    expect(cs.totalKnownCost.knownSpendAmount).toBe('700') // 100 material + 600 labour
+    expect([...cs.totalKnownCost.includedMemoryItemIds].sort()).toEqual(['ord', 'paid'])
+  })
+
+  it('classifies ambiguous labour cost as cost_worth_checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      // rate stated but no hours → no safe total → worth checking
+      makeMemory({ id: 'rate', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', costAmount: '35', costQualifier: 'per_hour', totalCostAmount: null, costCurrency: 'GBP' }),
+    ])
+    const res = await app.inject({ method: 'GET', url: MV, headers })
+    const labour = res.json<{ costSummary: { labour: { excludedRows: Array<{ reason: string }> } } }>().costSummary.labour
+    expect(labour.excludedRows[0].reason).toBe('cost_worth_checking')
+  })
+
+  it('exposes a labour section with labour fields on items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemory({ id: 'l1', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourPerson: 'Tom', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
+    ])
+    const res = await app.inject({ method: 'GET', url: MV, headers })
+    const section = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>().sections.find((s) => s.key === 'labour')
+    expect(section?.items).toHaveLength(1)
+    expect(section?.items[0].labourHours).toBe('6')
+    expect(section?.items[0].labourTask).toBe('cladding')
+  })
+})
+
+// ── Memory-item labour edits ──────────────────────────────────────────────────
+
+describe('memory-items — labour edits', () => {
+  const MI = `/api/jobs/${JOB_ID}/memory-items/${MEMORY_ID}`
+
+  it('full edit to labour persists labour fields and derives a per_hour total', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: MI, headers, payload: {
+      memoryType: 'labour', summary: 'Tom 8h electrics at £35/hr', materialName: null,
+      labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', costAmount: '35', costCurrency: 'GBP', costQualifier: 'per_hour',
+    } })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data.memoryType).toBe('LABOUR')
+    expect(call.data.labourHours).toBe('8')
+    expect(call.data.totalCostAmount).toBe('280') // 8 × 35
+  })
+
+  it('allows a category on a labour memory item', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeMemory({ memoryType: 'LABOUR', materialName: null }))
+    vi.mocked(prisma.jobBudgetCategory.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeCategory({ name: 'labour' }))
+    const res = await app.inject({ method: 'PATCH', url: MI, headers, payload: { budgetCategoryId: CAT_ID } })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<Record<string, unknown>>().budgetCategoryId).toBe(CAT_ID)
+  })
+
+  it('rejects per_hour as an invalid... no — accepts per_hour costQualifier', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: MI, headers, payload: { memoryType: 'labour', summary: 'x', costQualifier: 'per_hour', costAmount: '35', costCurrency: 'GBP', labourHours: '2' } })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update).mock.calls[0][0] as { data: Record<string, unknown> }
+    expect(call.data.totalCostAmount).toBe('70')
   })
 })

@@ -217,7 +217,7 @@ describe('GET /api/jobs/:jobId/memory-view — access control', () => {
 describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
   const headers = { 'x-pilot-user-id': USER_ID }
 
-  it('returns all six trusted-memory sections', async () => {
+  it('returns all seven trusted-memory sections', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
@@ -233,6 +233,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
       'supplier_delivery_notes',
       'customer_changes',
       'watch_outs',
+      'labour',
     ])
   })
 

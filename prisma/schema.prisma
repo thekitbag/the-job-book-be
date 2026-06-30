@@ -158,6 +158,7 @@ enum FactType {
   SUPPLIER_DELIVERY_NOTE
   CUSTOMER_CHANGE
   WATCH_OUT
+  LABOUR
   UNCLEAR
 }
 
@@ -197,6 +198,9 @@ model CandidateFact {
   costCurrency            String?
   costQualifier           String?
   totalCostAmount         String?
+  labourHours             String?
+  labourPerson            String?
+  labourTask              String?
   extractionProvider      String?
   extractionModel         String?
   extractionSchemaVersion String?
@@ -260,6 +264,9 @@ model MemoryItem {
   costCurrency          String?
   costQualifier         String?
   totalCostAmount       String?
+  labourHours           String?
+  labourPerson          String?
+  labourTask            String?
   unresolvedFlags       String[] @default([])
   budgetCategoryId      String?
   createdAt             DateTime @default(now())

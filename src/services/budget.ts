@@ -159,19 +159,25 @@ interface SpendItem {
   materialName: string | null
   quantity: string | null
   unit: string | null
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
   costCurrency: string | null
   totalCostAmount: string | null
   unresolvedFlags: string[]
   budgetCategoryId: string | null
 }
 
-// A memory item counts toward budget known spend only when it is a trusted
-// ORDERED_MATERIAL with a safe GBP line total and no unresolved flags. This is
-// the same inclusion rule memory-view uses for job-level Known spend, so the two
-// summaries always agree (see the spend-summary invariant in the budget spec).
-function isSafeGbpOrderedSpend(item: SpendItem): boolean {
+// Memory types that carry a monetary line total into known cost.
+const SPEND_MEMORY_TYPES = new Set(['ORDERED_MATERIAL', 'LABOUR'])
+
+// A memory item counts toward known cost only when it is a trusted bought/ordered
+// or labour item with a safe GBP line total and no unresolved flags. For labour
+// the per_hour total is already derived at write time, so checking totalCostAmount
+// is sufficient. This is the same rule memory-view uses, so the summaries agree.
+function isSafeGbpSpend(item: SpendItem): boolean {
   return (
-    item.memoryType === 'ORDERED_MATERIAL' &&
+    SPEND_MEMORY_TYPES.has(item.memoryType) &&
     item.unresolvedFlags.length === 0 &&
     item.costCurrency === 'GBP' &&
     !!item.totalCostAmount
@@ -183,10 +189,15 @@ function toSpendRow(item: SpendItem) {
   const currency = item.costCurrency as string
   return {
     memoryItemId: item.id,
-    itemLabel: resolveSpendItemLabel(item.materialName, item.summary),
+    memoryType: item.memoryType.toLowerCase(),
+    // Prefer materialName for bought items, labourTask for labour, then summary.
+    itemLabel: resolveSpendItemLabel(item.materialName ?? item.labourTask, item.summary),
     materialName: item.materialName,
     quantity: item.quantity,
     unit: item.unit,
+    labourHours: item.labourHours,
+    labourPerson: item.labourPerson,
+    labourTask: item.labourTask,
     lineTotalAmount: total,
     lineTotalCurrency: currency,
     lineTotalLabel: formatLineTotalLabel(total, currency) ?? `${gbp(total)} total`,
@@ -234,10 +245,10 @@ export async function getBudgetSummary(jobId: string, userId: string) {
       where: { jobId, isArchived: false },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     }),
-    prisma.memoryItem.findMany({ where: { jobId, memoryType: 'ORDERED_MATERIAL' } }),
+    prisma.memoryItem.findMany({ where: { jobId, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR'] } } }),
   ])
 
-  const safe = (items as SpendItem[]).filter(isSafeGbpOrderedSpend)
+  const safe = (items as SpendItem[]).filter(isSafeGbpSpend)
 
   // Group safe rows by category id (null → uncategorised).
   const rowsByCategory = new Map<string, SpendRow[]>()
@@ -345,35 +356,58 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-// Deterministic, strong-evidence-only suggestion for a bought/ordered proposed
-// memory. No fuzzy/substring/supplier/AI matching. A single exact materialName
-// match wins; otherwise a single whole-word/phrase match of a category name in
-// the summary is used. Anything ambiguous yields no suggestion.
-export function suggestBudgetCategory(
-  memoryType: string,
-  materialName: string | null,
-  summary: string | null,
-  categories: NormalizedCategory[],
-): BudgetCategorySuggestion | null {
-  if (memoryType !== 'ordered_material' || categories.length === 0) return null
+function exactNameMatch(value: string | null | undefined, categories: NormalizedCategory[]): NormalizedCategory[] {
+  const v = value?.trim().toLowerCase()
+  return v ? categories.filter((c) => c.name.trim().toLowerCase() === v) : []
+}
 
-  const mat = materialName?.trim().toLowerCase()
-  const nameMatches = mat ? categories.filter((c) => c.name.trim().toLowerCase() === mat) : []
-  if (nameMatches.length === 1) {
-    const c = nameMatches[0]
-    return { budgetCategoryId: c.id, categoryName: c.name, reason: 'material_name_match' }
-  }
-  // Two or more exact material-name matches are ambiguous → no suggestion.
-  if (nameMatches.length > 1) return null
-
+function summaryPhraseMatch(summary: string | null | undefined, categories: NormalizedCategory[]): NormalizedCategory[] {
   const text = summary ?? ''
-  const summaryMatches = categories.filter((c) => {
+  return categories.filter((c) => {
     const name = c.name.trim()
     return name.length > 0 && new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i').test(text)
   })
-  if (summaryMatches.length === 1) {
-    const c = summaryMatches[0]
-    return { budgetCategoryId: c.id, categoryName: c.name, reason: 'summary_match' }
+}
+
+const toSuggestion = (c: NormalizedCategory, reason: BudgetCategorySuggestion['reason']): BudgetCategorySuggestion =>
+  ({ budgetCategoryId: c.id, categoryName: c.name, reason })
+
+export interface SuggestionInput {
+  memoryType: string
+  materialName?: string | null
+  summary?: string | null
+  labourTask?: string | null
+}
+
+// Deterministic, strong-evidence-only category suggestion for a bought/ordered or
+// labour proposed memory. No fuzzy/substring/supplier/AI matching; anything
+// ambiguous yields no suggestion. A single exact structured-field match
+// (materialName for material, labourTask or a category literally named "labour"
+// for labour) wins; otherwise a single whole-word category match in the summary.
+export function suggestBudgetCategory(
+  input: SuggestionInput,
+  categories: NormalizedCategory[],
+): BudgetCategorySuggestion | null {
+  const { memoryType } = input
+  if (categories.length === 0) return null
+  if (memoryType !== 'ordered_material' && memoryType !== 'labour') return null
+
+  if (memoryType === 'labour') {
+    // A category literally named "labour" is the strong default for labour facts.
+    const labourNamed = exactNameMatch('labour', categories)
+    if (labourNamed.length === 1) return toSuggestion(labourNamed[0], 'material_name_match')
+    if (labourNamed.length > 1) return null
+
+    const taskMatches = exactNameMatch(input.labourTask, categories)
+    if (taskMatches.length === 1) return toSuggestion(taskMatches[0], 'material_name_match')
+    if (taskMatches.length > 1) return null
+  } else {
+    const nameMatches = exactNameMatch(input.materialName, categories)
+    if (nameMatches.length === 1) return toSuggestion(nameMatches[0], 'material_name_match')
+    if (nameMatches.length > 1) return null
   }
+
+  const summaryMatches = summaryPhraseMatch(input.summary, categories)
+  if (summaryMatches.length === 1) return toSuggestion(summaryMatches[0], 'summary_match')
   return null
 }

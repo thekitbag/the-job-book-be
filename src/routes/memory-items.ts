@@ -8,7 +8,7 @@ const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
 function isValidDecimalString(v: unknown): boolean {
   return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
 }
-const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown'])
+const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown', 'per_hour'])
 const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
 
 const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -27,6 +27,9 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       costCurrency?: string | null
       costQualifier?: string | null
       totalCostAmount?: string | null
+      labourHours?: string | null
+      labourPerson?: string | null
+      labourTask?: string | null
       uncertaintyResolution?: string
       budgetCategoryId?: string | null
     }
@@ -53,7 +56,10 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'totalCostAmount must be a decimal string' })
     }
     if (body.costQualifier != null && !VALID_QUALIFIERS.has(body.costQualifier)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costQualifier must be each, total, approx, or unknown' })
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costQualifier must be each, total, per_hour, approx, or unknown' })
+    }
+    if (body.labourHours != null && !isValidDecimalString(body.labourHours)) {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'labourHours must be a decimal string' })
     }
     if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })

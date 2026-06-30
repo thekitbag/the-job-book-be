@@ -16,6 +16,7 @@ const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
   SUPPLIER_DELIVERY_NOTE: 'supplier_delivery_notes',
   CUSTOMER_CHANGE: 'customer_changes',
   WATCH_OUT: 'watch_outs',
+  LABOUR: 'labour',
 }
 
 // Build a display cost label from stored cost fields (GBP only for now; ISO code fallback)
@@ -310,6 +311,113 @@ function buildOrderedMaterialsCostSummary(
   }
 }
 
+// ── Labour cost summary ───────────────────────────────────────────────────────
+
+type LabourExclusionReason = 'no_rate_or_cost' | 'cost_worth_checking'
+
+interface LabourItem {
+  id: string
+  summary: string
+  materialName: string | null
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
+  costAmount: string | null
+  costCurrency: string | null
+  totalCostAmount: string | null
+  unresolvedFlags: string[]
+}
+
+function labourItemLabel(item: LabourItem): string {
+  return resolveSpendItemLabel(item.materialName ?? item.labourTask, item.summary)
+}
+
+// Classify each LABOUR memory item: a safe GBP monetary total contributes to known
+// cost; hours-only labour is remembered but excluded as `no_rate_or_cost`; anything
+// else excluded with cost left to check (mirrors the ordered-materials rules).
+function buildLabourCostSummary(items: LabourItem[]) {
+  const included: LabourItem[] = []
+  const excludedRows: Array<{
+    memoryItemId: string
+    itemLabel: string
+    labourHours: string | null
+    labourPerson: string | null
+    labourTask: string | null
+    reason: LabourExclusionReason
+  }> = []
+
+  const exclude = (item: LabourItem, reason: LabourExclusionReason) => {
+    excludedRows.push({
+      memoryItemId: item.id,
+      itemLabel: labourItemLabel(item),
+      labourHours: item.labourHours,
+      labourPerson: item.labourPerson,
+      labourTask: item.labourTask,
+      reason,
+    })
+  }
+
+  for (const m of items) {
+    if (m.unresolvedFlags.length === 0 && !m.totalCostAmount && !m.costAmount) {
+      exclude(m, 'no_rate_or_cost')
+      continue
+    }
+    if (m.unresolvedFlags.length > 0 || !m.totalCostAmount || !m.costCurrency || m.costCurrency !== 'GBP') {
+      exclude(m, 'cost_worth_checking')
+      continue
+    }
+    included.push(m)
+  }
+
+  let knownSpendAmount: string | null = null
+  let knownSpendLabel: string | null = null
+  if (included.length > 0) {
+    const total = included.reduce((sum, i) => sum + (strictParsePositive(i.totalCostAmount) ?? 0), 0)
+    knownSpendAmount = String(Math.round(total * 100) / 100)
+    knownSpendLabel = `£${knownSpendAmount} known spend`
+  }
+
+  return {
+    knownSpendAmount,
+    knownSpendCurrency: included.length > 0 ? 'GBP' : null,
+    knownSpendLabel,
+    includedMemoryItemIds: included.map((i) => i.id),
+    excludedRows,
+    rows: included.map((i) => ({
+      memoryItemId: i.id,
+      itemLabel: labourItemLabel(i),
+      labourHours: i.labourHours,
+      labourPerson: i.labourPerson,
+      labourTask: i.labourTask,
+      lineTotalAmount: i.totalCostAmount as string,
+      lineTotalCurrency: 'GBP',
+      lineTotalLabel: formatLineTotalLabel(i.totalCostAmount, 'GBP') ?? `£${i.totalCostAmount} total`,
+    })),
+  }
+}
+
+// Combine ordered-material and labour known cost into a single job-level total.
+// Equals budget-summary.totals.knownSpendAmount for the same GBP state.
+function buildTotalKnownCost(
+  ordered: { knownSpendAmount: string | null; includedMemoryItemIds: string[] },
+  labour: { knownSpendAmount: string | null; includedMemoryItemIds: string[] },
+) {
+  const includedMemoryItemIds = [...ordered.includedMemoryItemIds, ...labour.includedMemoryItemIds]
+  if (ordered.knownSpendAmount === null && labour.knownSpendAmount === null) {
+    return { knownSpendAmount: null, knownSpendCurrency: null, knownSpendLabel: null, includedMemoryItemIds }
+  }
+  const total =
+    (strictParsePositive(ordered.knownSpendAmount) ?? 0) +
+    (strictParsePositive(labour.knownSpendAmount) ?? 0)
+  const knownSpendAmount = String(Math.round(total * 100) / 100)
+  return {
+    knownSpendAmount,
+    knownSpendCurrency: 'GBP',
+    knownSpendLabel: `£${knownSpendAmount} known cost`,
+    includedMemoryItemIds,
+  }
+}
+
 const SECTION_CONFIG = [
   { key: 'ordered_materials', label: 'Ordered materials' },
   { key: 'used_materials', label: 'Used materials' },
@@ -317,6 +425,7 @@ const SECTION_CONFIG = [
   { key: 'supplier_delivery_notes', label: 'Supplier delivery notes' },
   { key: 'customer_changes', label: 'Customer changes' },
   { key: 'watch_outs', label: 'Watch outs' },
+  { key: 'labour', label: 'Labour' },
 ] as const
 
 export async function getMemoryView(jobId: string, userId: string) {
@@ -378,6 +487,9 @@ export async function getMemoryView(jobId: string, userId: string) {
         costCurrency: m.costCurrency,
         costQualifier: m.costQualifier,
         totalCostAmount: m.totalCostAmount,
+        labourHours: m.labourHours,
+        labourPerson: m.labourPerson,
+        labourTask: m.labourTask,
         budgetCategoryId: m.budgetCategoryId,
         unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
         lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
@@ -426,8 +538,12 @@ export async function getMemoryView(jobId: string, userId: string) {
     return { key, label: SUMMARY_SECTION_LABELS[key], items: consolidateSummaryRows(rawRows) }
   })
 
+  const orderedMaterials = buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? [])
+  const labour = buildLabourCostSummary((bySection.get('labour') ?? []) as unknown as LabourItem[])
   const costSummary = {
-    orderedMaterials: buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? []),
+    orderedMaterials,
+    labour,
+    totalKnownCost: buildTotalKnownCost(orderedMaterials, labour),
   }
 
   return {

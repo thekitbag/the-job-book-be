@@ -1,7 +1,12 @@
 import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
-import { formatUnitCostLabel, formatLineTotalLabel } from '../lib/cost-utils.js'
+import {
+  formatUnitCostLabel,
+  formatLineTotalLabel,
+  deriveSafeLineTotal,
+  deriveSafeLabourTotal,
+} from '../lib/cost-utils.js'
 import {
   getActiveBudgetCategories,
   suggestBudgetCategory,
@@ -17,6 +22,7 @@ const FACT_TYPE_TO_SECTION: Record<string, string> = {
   SUPPLIER_DELIVERY_NOTE: 'supplier_delivery_notes',
   CUSTOMER_CHANGE: 'customer_changes',
   WATCH_OUT: 'watch_outs',
+  LABOUR: 'labour',
   UNCLEAR: 'unclear_items',
 }
 
@@ -27,6 +33,7 @@ const SECTION_LABELS: Record<string, string> = {
   supplier_delivery_notes: 'Supplier delivery notes',
   customer_changes: 'Customer changes',
   watch_outs: 'Watch outs',
+  labour: 'Labour',
   unclear_items: 'Unclear items',
 }
 
@@ -34,8 +41,11 @@ const SECTION_KEYS = Object.keys(SECTION_LABELS)
 
 const VALID_MEMORY_TYPES = new Set([
   'ordered_material', 'used_material', 'leftover_material',
-  'supplier_delivery_note', 'customer_change', 'watch_out',
+  'supplier_delivery_note', 'customer_change', 'watch_out', 'labour',
 ])
+
+// Memory types for which a budget category is meaningful in this slice.
+const CATEGORY_ELIGIBLE_TYPES = new Set(['ordered_material', 'labour'])
 
 // Stable deterministic ID derived from the job + sorted source fact IDs.
 // Same inputs always produce the same ID so GET regenerations never invalidate
@@ -62,6 +72,9 @@ interface ProposedMemory {
   costCurrency: string | null
   costQualifier: string | null
   totalCostAmount: string | null
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
 }
 
 interface GroupedItemData {
@@ -90,6 +103,9 @@ type FactWithContext = {
   costCurrency: string | null
   costQualifier: string | null
   totalCostAmount: string | null
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
   confidenceLabel: string
   uncertaintyFlags: string[]
   sourceNoteId: string
@@ -111,6 +127,9 @@ export interface CorrectedFields {
   costCurrency?: string | null
   costQualifier?: string | null
   totalCostAmount?: string | null
+  labourHours?: string | null
+  labourPerson?: string | null
+  labourTask?: string | null
   budgetCategoryId?: string | null
 }
 
@@ -140,8 +159,8 @@ async function resolveDecisionCategory(
 
   if (provided === undefined || provided === null) return null
 
-  if (finalMemoryType !== 'ordered_material') {
-    throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material memory' }
+  if (!CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
   }
   await assertAssignableCategory(jobId, provided)
   return provided
@@ -163,6 +182,9 @@ function extractProposedMemory(f: FactWithContext): ProposedMemory {
     costCurrency: f.costCurrency,
     costQualifier: f.costQualifier,
     totalCostAmount: f.totalCostAmount,
+    labourHours: f.labourHours,
+    labourPerson: f.labourPerson,
+    labourTask: f.labourTask,
   }
 }
 
@@ -414,7 +436,10 @@ export async function getReviewQueue(jobId: string, userId: string) {
     ...section,
     items: section.items.map((item) => {
       const pm = item.proposedMemory as unknown as ProposedMemory
-      const suggestion = suggestBudgetCategory(pm.memoryType, pm.materialName, pm.summary, budgetCategories)
+      const suggestion = suggestBudgetCategory(
+        { memoryType: pm.memoryType, materialName: pm.materialName, summary: pm.summary, labourTask: pm.labourTask },
+        budgetCategories,
+      )
       return {
         ...item,
         proposedMemory: {
@@ -458,6 +483,9 @@ export async function getReviewQueue(jobId: string, userId: string) {
     costCurrency: m.costCurrency,
     costQualifier: m.costQualifier,
     totalCostAmount: m.totalCostAmount,
+    labourHours: m.labourHours,
+    labourPerson: m.labourPerson,
+    labourTask: m.labourTask,
     unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
     lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
     uncertaintyFlags: m.unresolvedFlags,
@@ -535,6 +563,9 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costCurrency: pm.costCurrency,
           costQualifier: pm.costQualifier,
           totalCostAmount: pm.totalCostAmount,
+          labourHours: pm.labourHours,
+          labourPerson: pm.labourPerson,
+          labourTask: pm.labourTask,
           unresolvedFlags,
           budgetCategoryId,
         },
@@ -567,6 +598,13 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
       jobId, corrected.memoryType.toLowerCase(), payload.budgetCategoryId, corrected.budgetCategoryId,
     )
 
+    // Preserve an explicit total, else safely derive from material each or labour per_hour.
+    const correctedTotalCostAmount =
+      corrected.totalCostAmount ??
+      deriveSafeLineTotal(corrected.quantity, corrected.costAmount, corrected.costQualifier) ??
+      deriveSafeLabourTotal(corrected.labourHours, corrected.costAmount, corrected.costQualifier) ??
+      null
+
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })
 
@@ -597,7 +635,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costAmount: corrected.costAmount ?? null,
           costCurrency: corrected.costCurrency ?? null,
           costQualifier: corrected.costQualifier ?? null,
-          totalCostAmount: corrected.totalCostAmount ?? null,
+          totalCostAmount: correctedTotalCostAmount,
+          labourHours: corrected.labourHours ?? null,
+          labourPerson: corrected.labourPerson ?? null,
+          labourTask: corrected.labourTask ?? null,
           unresolvedFlags,
           budgetCategoryId,
         },
