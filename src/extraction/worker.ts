@@ -1,7 +1,7 @@
 import { prisma } from '../db/client.js'
 import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
-import { strictParsePositive, deriveSafeLineTotal, hasCostConflict } from '../lib/cost-utils.js'
+import { strictParsePositive, deriveSafeLineTotal, deriveSafeLabourTotal, hasCostConflict } from '../lib/cost-utils.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -11,12 +11,14 @@ function toDbConfidence(cl: string): string {
   return cl.toUpperCase()
 }
 
-// Preserve an explicit totalCostAmount from the provider, or derive one when
-// qualifier is "each" and both fields are unambiguous numerics. Returns undefined
-// (not null) so the field stays unset when derivation is not safe.
+// Preserve an explicit totalCostAmount from the provider, or derive one when it is
+// unambiguous: material "each" (qty × unit cost) or labour "per_hour" (hours × rate).
+// Returns undefined (not null) so the field stays unset when derivation is not safe.
 function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
   if (fact.totalCostAmount) return fact.totalCostAmount
-  const derived = deriveSafeLineTotal(fact.quantity, fact.costAmount, fact.costQualifier)
+  const derived =
+    deriveSafeLineTotal(fact.quantity, fact.costAmount, fact.costQualifier) ??
+    deriveSafeLabourTotal(fact.labourHours, fact.costAmount, fact.costQualifier)
   return derived ?? undefined
 }
 
@@ -99,6 +101,9 @@ export async function runExtraction(
             costCurrency: fact.costCurrency ?? null,
             costQualifier: fact.costQualifier ?? null,
             totalCostAmount: deriveSafeTotalCost(fact) ?? null,
+            labourHours: fact.labourHours ?? null,
+            labourPerson: fact.labourPerson ?? null,
+            labourTask: fact.labourTask ?? null,
             confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
             confidenceReason: fact.confidenceReason,
             uncertaintyFlags: resolveUncertaintyFlags(fact),

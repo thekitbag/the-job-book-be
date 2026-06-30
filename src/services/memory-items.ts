@@ -2,11 +2,15 @@ import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import {
   deriveSafeLineTotal,
+  deriveSafeLabourTotal,
   hasCostConflict,
   formatUnitCostLabel,
   formatLineTotalLabel,
 } from '../lib/cost-utils.js'
 import { assertAssignableCategory } from './budget.js'
+
+// Memory types for which a budget category is meaningful in this slice.
+const CATEGORY_ELIGIBLE_TYPES = new Set(['ORDERED_MATERIAL', 'LABOUR'])
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -27,6 +31,9 @@ export interface MemoryItemPatch {
   costCurrency?: string | null
   costQualifier?: string | null
   totalCostAmount?: string | null
+  labourHours?: string | null
+  labourPerson?: string | null
+  labourTask?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
   budgetCategoryId?: string | null
 }
@@ -45,7 +52,7 @@ export async function patchMemoryItem(
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
   // The final memory type is the patched one (full edit) or the existing one
-  // (category-only edit). A category may only live on ORDERED_MATERIAL memory.
+  // (category-only edit). A category may only live on category-eligible memory.
   const finalMemoryType = patch.memoryType ? patch.memoryType.toUpperCase() : existing.memoryType
 
   // Category assignment: undefined preserves, null clears, a string must reference
@@ -55,17 +62,17 @@ export async function patchMemoryItem(
     if (patch.budgetCategoryId === null) {
       budgetCategoryId = null
     } else {
-      if (finalMemoryType !== 'ORDERED_MATERIAL') {
-        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material memory' }
+      if (!CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
+        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
       }
       await assertAssignableCategory(jobId, patch.budgetCategoryId)
       budgetCategoryId = patch.budgetCategoryId
     }
   }
 
-  // If the memory type is (or becomes) non-ordered, a preserved category is
-  // cleared so trusted memory never carries a category on the wrong type.
-  if (budgetCategoryId !== null && finalMemoryType !== 'ORDERED_MATERIAL') {
+  // If the memory type is (or becomes) category-ineligible, a preserved category
+  // is cleared so trusted memory never carries a category on the wrong type.
+  if (budgetCategoryId !== null && !CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
     budgetCategoryId = null
   }
 
@@ -92,9 +99,12 @@ export async function patchMemoryItem(
   const effCostAmount = 'costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount
   const effCostCurrency = 'costCurrency' in patch ? (patch.costCurrency ?? null) : existing.costCurrency
   const effCostQualifier = 'costQualifier' in patch ? (patch.costQualifier ?? null) : existing.costQualifier
+  const effLabourHours = 'labourHours' in patch ? (patch.labourHours ?? null) : existing.labourHours
 
-  // Re-derive safe line total from effective fields
-  const derived = deriveSafeLineTotal(effQty, effCostAmount, effCostQualifier)
+  // Re-derive safe line total from effective fields (material each or labour per_hour)
+  const derived =
+    deriveSafeLineTotal(effQty, effCostAmount, effCostQualifier) ??
+    deriveSafeLabourTotal(effLabourHours, effCostAmount, effCostQualifier)
 
   // Explicit patch value wins; otherwise use derived or preserve existing
   const explicitTotalInPatch = 'totalCostAmount' in patch
@@ -129,6 +139,9 @@ export async function patchMemoryItem(
       costCurrency: 'costCurrency' in patch ? patch.costCurrency ?? null : existing.costCurrency,
       costQualifier: 'costQualifier' in patch ? patch.costQualifier ?? null : existing.costQualifier,
       totalCostAmount: finalTotalCostAmount,
+      labourHours: 'labourHours' in patch ? patch.labourHours ?? null : existing.labourHours,
+      labourPerson: 'labourPerson' in patch ? patch.labourPerson ?? null : existing.labourPerson,
+      labourTask: 'labourTask' in patch ? patch.labourTask ?? null : existing.labourTask,
       unresolvedFlags,
     },
     include: {
@@ -183,6 +196,9 @@ function normalizeMemoryItem(
     costCurrency: string | null
     costQualifier: string | null
     totalCostAmount: string | null
+    labourHours: string | null
+    labourPerson: string | null
+    labourTask: string | null
     unresolvedFlags: string[]
     budgetCategoryId: string | null
     sourceCandidateFactId: string | null
@@ -213,6 +229,9 @@ function normalizeMemoryItem(
     costCurrency: item.costCurrency,
     costQualifier: item.costQualifier,
     totalCostAmount: item.totalCostAmount,
+    labourHours: item.labourHours,
+    labourPerson: item.labourPerson,
+    labourTask: item.labourTask,
     budgetCategoryId: item.budgetCategoryId,
     unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
     lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),

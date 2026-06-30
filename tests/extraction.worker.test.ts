@@ -695,3 +695,51 @@ describe('runExtraction — cost field persistence and safe total derivation', (
     expect(data.totalCostAmount).toBeNull()
   })
 })
+
+describe('runExtraction — labour facts', () => {
+  // Find the create() data for a fact by its summary substring.
+  function dataFor(prisma: any, needle: string) {
+    const call = vi.mocked(prisma.candidateFact.create as any).mock.calls
+      .map((c: any) => c[0].data)
+      .find((d: any) => d.summary.includes(needle))
+    return call
+  }
+
+  it('persists labour fields and leaves cost null for hours-only labour', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    const d = dataFor(prisma, 'fitting the cladding')
+    expect(d.factType).toBe('LABOUR')
+    expect(d.labourHours).toBe('6')
+    expect(d.labourTask).toBe('fitting cladding')
+    expect(d.labourPerson).toBeNull()
+    expect(d.totalCostAmount).toBeNull()
+  })
+
+  it('derives a safe total for per_hour labour (hours × rate)', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    const d = dataFor(prisma, 'electrics')
+    expect(d.factType).toBe('LABOUR')
+    expect(d.labourHours).toBe('8')
+    expect(d.labourPerson).toBe('Tom')
+    expect(d.costQualifier).toBe('per_hour')
+    expect(d.costAmount).toBe('35')
+    expect(d.totalCostAmount).toBe('280') // 8 × 35
+  })
+
+  it('keeps an explicit labour total', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+
+    const d = dataFor(prisma, 'Labour on the roof')
+    expect(d.costQualifier).toBe('total')
+    expect(d.totalCostAmount).toBe('600')
+    expect(d.labourHours).toBeNull()
+  })
+})

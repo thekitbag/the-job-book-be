@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { SYSTEM_PROMPT } from '../src/extraction/openai.js'
 
+describe('OpenAI extraction prompt — labour', () => {
+  it('documents the labour fact type and fields', () => {
+    expect(SYSTEM_PROMPT).toContain('labour')
+    expect(SYSTEM_PROMPT).toContain('per_hour')
+    expect(SYSTEM_PROMPT).toContain('labourHours')
+    expect(SYSTEM_PROMPT).toContain('labourPerson')
+    expect(SYSTEM_PROMPT).toContain('labourTask')
+  })
+
+  it('includes the labour examples from the spec', () => {
+    expect(SYSTEM_PROMPT).toContain('fitting the cladding')
+    expect(SYSTEM_PROMPT).toContain('£35 an hour')
+    expect(SYSTEM_PROMPT).toContain('Labour on the roof')
+  })
+})
+
 describe('OpenAI extraction prompt — pilot supplier glossary', () => {
   it('includes all pilot supplier names', () => {
     expect(SYSTEM_PROMPT).toContain('Jewson')

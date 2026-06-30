@@ -56,6 +56,20 @@ export function deriveSafeLineTotal(
   return String(Math.round(qty * cost * 100) / 100)
 }
 
+// Pure derivation: labourHours × hourlyRate when qualifier is 'per_hour' and both
+// are strict positives. Mirrors deriveSafeLineTotal for labour money.
+export function deriveSafeLabourTotal(
+  labourHours: string | null | undefined,
+  costAmount: string | null | undefined,
+  costQualifier: string | null | undefined,
+): string | null {
+  if (costQualifier !== 'per_hour') return null
+  const hours = strictParsePositive(labourHours)
+  const rate = strictParsePositive(costAmount)
+  if (hours === null || rate === null) return null
+  return String(Math.round(hours * rate * 100) / 100)
+}
+
 // True when a stored totalCostAmount conflicts with the derivable amount.
 // Returns false whenever derivation is impossible (non-'each' qualifier, non-numeric fields, missing total).
 export function hasCostConflict(
