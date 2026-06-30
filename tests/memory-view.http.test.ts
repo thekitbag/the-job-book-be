@@ -271,6 +271,19 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
     expect(used?.items[0].materialName).toBe('OSB board')
   })
 
+  it('includes budgetCategoryId on section items', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemoryItem({ budgetCategoryId: 'cat-timber' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    const body = res.json<{ sections: Array<{ key: string; items: Array<{ budgetCategoryId: string | null }> }> }>()
+    const ordered = body.sections.find((s) => s.key === 'ordered_materials')
+    expect(ordered?.items[0].budgetCategoryId).toBe('cat-timber')
+  })
+
   it('returns normalized lowercase memoryType and job status', async () => {
     const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
 

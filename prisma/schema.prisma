@@ -37,12 +37,13 @@ model Job {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  owner           User             @relation(fields: [ownerUserId], references: [id])
-  rawNotes        RawNote[]
-  candidateFacts  CandidateFact[]
-  reviewDecisions ReviewDecision[]
-  memoryItems     MemoryItem[]
-  queueItems      QueueItem[]
+  owner            User                @relation(fields: [ownerUserId], references: [id])
+  rawNotes         RawNote[]
+  candidateFacts   CandidateFact[]
+  reviewDecisions  ReviewDecision[]
+  memoryItems      MemoryItem[]
+  queueItems       QueueItem[]
+  budgetCategories JobBudgetCategory[]
 
   @@map("jobs")
 }
@@ -260,14 +261,35 @@ model MemoryItem {
   costQualifier         String?
   totalCostAmount       String?
   unresolvedFlags       String[] @default([])
+  budgetCategoryId      String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  job            Job            @relation(fields: [jobId], references: [id])
-  reviewDecision ReviewDecision @relation(fields: [reviewDecisionId], references: [id])
-  sourceFact     CandidateFact? @relation(fields: [sourceCandidateFactId], references: [id])
+  job            Job                @relation(fields: [jobId], references: [id])
+  reviewDecision ReviewDecision     @relation(fields: [reviewDecisionId], references: [id])
+  sourceFact     CandidateFact?     @relation(fields: [sourceCandidateFactId], references: [id])
+  budgetCategory JobBudgetCategory? @relation(fields: [budgetCategoryId], references: [id])
 
+  @@index([jobId, budgetCategoryId])
   @@map("memory_items")
+}
+
+model JobBudgetCategory {
+  id             String   @id @default(uuid())
+  jobId          String
+  name           String
+  budgetAmount   String?
+  budgetCurrency String?
+  sortOrder      Int      @default(0)
+  isArchived     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  job         Job          @relation(fields: [jobId], references: [id])
+  memoryItems MemoryItem[]
+
+  @@index([jobId, sortOrder])
+  @@map("job_budget_categories")
 }
 
 model QueueItem {

@@ -2,6 +2,11 @@ import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import { formatUnitCostLabel, formatLineTotalLabel } from '../lib/cost-utils.js'
+import {
+  getActiveBudgetCategories,
+  suggestBudgetCategory,
+  assertAssignableCategory,
+} from './budget.js'
 
 // ── Section configuration ─────────────────────────────────────────────────────
 
@@ -106,12 +111,41 @@ export interface CorrectedFields {
   costCurrency?: string | null
   costQualifier?: string | null
   totalCostAmount?: string | null
+  budgetCategoryId?: string | null
 }
 
 export type QueueDecisionPayload =
-  | { action: 'confirm'; queueItemId: string; uncertaintyResolution?: 'resolved' | 'still_unsure' }
-  | { action: 'correct'; queueItemId: string; corrected: CorrectedFields; uncertaintyResolution?: 'resolved' | 'still_unsure' }
+  | { action: 'confirm'; queueItemId: string; uncertaintyResolution?: 'resolved' | 'still_unsure'; budgetCategoryId?: string | null }
+  | { action: 'correct'; queueItemId: string; corrected: CorrectedFields; uncertaintyResolution?: 'resolved' | 'still_unsure'; budgetCategoryId?: string | null }
   | { action: 'dismiss'; queueItemId: string; reason?: string }
+
+// Reconcile a top-level and a corrected category id, validate against the job,
+// and enforce that a category is only attached to ordered_material memory.
+// Returns the category id to persist (or null for "remembered with no category").
+async function resolveDecisionCategory(
+  jobId: string,
+  finalMemoryType: string,
+  topLevel: string | null | undefined,
+  inner: string | null | undefined,
+): Promise<string | null> {
+  let provided: string | null | undefined
+  if (topLevel !== undefined && inner !== undefined) {
+    if (topLevel !== inner) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId and corrected.budgetCategoryId must match' }
+    }
+    provided = topLevel
+  } else {
+    provided = topLevel !== undefined ? topLevel : inner
+  }
+
+  if (provided === undefined || provided === null) return null
+
+  if (finalMemoryType !== 'ordered_material') {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material memory' }
+  }
+  await assertAssignableCategory(jobId, provided)
+  return provided
+}
 
 // ── Grouping helpers ──────────────────────────────────────────────────────────
 
@@ -371,23 +405,36 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
   const { sections: baseSections, factMap } = await buildFreshQueueSections(jobId, now)
 
-  // Add sourceContext to each item using the factMap (review-queue-specific enrichment)
+  // Active categories drive review-time suggestions, recomputed on every GET so a
+  // queue item created before categories changed still reflects current categories.
+  const budgetCategories = await getActiveBudgetCategories(jobId)
+
+  // Add sourceContext and a (response-only) budget category suggestion to each item.
   const sections = baseSections.map((section) => ({
     ...section,
-    items: section.items.map((item) => ({
-      ...item,
-      sourceContext: item.sourceCandidateFactIds.flatMap((id) => {
-        const f = factMap.get(id)
-        if (!f) return []
-        return [{
-          candidateFactId: f.id,
-          noteId: f.sourceNoteId,
-          transcriptId: f.sourceTranscriptId,
-          capturedAt: f.sourceNote.capturedAt,
-          transcriptText: f.transcript.text ?? null,
-        }]
-      }),
-    })),
+    items: section.items.map((item) => {
+      const pm = item.proposedMemory as unknown as ProposedMemory
+      const suggestion = suggestBudgetCategory(pm.memoryType, pm.materialName, pm.summary, budgetCategories)
+      return {
+        ...item,
+        proposedMemory: {
+          ...pm,
+          budgetCategoryId: suggestion ? suggestion.budgetCategoryId : null,
+          budgetCategorySuggestion: suggestion,
+        },
+        sourceContext: item.sourceCandidateFactIds.flatMap((id) => {
+          const f = factMap.get(id)
+          if (!f) return []
+          return [{
+            candidateFactId: f.id,
+            noteId: f.sourceNoteId,
+            transcriptId: f.sourceTranscriptId,
+            capturedAt: f.sourceNote.capturedAt,
+            transcriptText: f.transcript.text ?? null,
+          }]
+        }),
+      }
+    }),
   }))
 
   const memoryItems = await prisma.memoryItem.findMany({
@@ -415,9 +462,10 @@ export async function getReviewQueue(jobId: string, userId: string) {
     lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
     uncertaintyFlags: m.unresolvedFlags,
     sourceUncertaintyFlags: m.sourceFact?.uncertaintyFlags ?? [],
+    budgetCategoryId: m.budgetCategoryId,
   }))
 
-  return { jobId, generatedAt: now, sections, alreadyRemembered }
+  return { jobId, generatedAt: now, budgetCategories, sections, alreadyRemembered }
 }
 
 // ── POST /api/jobs/:jobId/review-queue-decisions ──────────────────────────────
@@ -452,6 +500,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     const unresolvedFlags =
       payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
 
+    const budgetCategoryId = await resolveDecisionCategory(
+      jobId, pm.memoryType, payload.budgetCategoryId, undefined,
+    )
+
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'confirmed' } })
 
@@ -484,6 +536,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costQualifier: pm.costQualifier,
           totalCostAmount: pm.totalCostAmount,
           unresolvedFlags,
+          budgetCategoryId,
         },
       })
 
@@ -509,6 +562,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     const memoryType = (corrected.memoryType.toUpperCase()) as never
     const unresolvedFlags =
       payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
+
+    const budgetCategoryId = await resolveDecisionCategory(
+      jobId, corrected.memoryType.toLowerCase(), payload.budgetCategoryId, corrected.budgetCategoryId,
+    )
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })
@@ -542,6 +599,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costQualifier: corrected.costQualifier ?? null,
           totalCostAmount: corrected.totalCostAmount ?? null,
           unresolvedFlags,
+          budgetCategoryId,
         },
       })
 

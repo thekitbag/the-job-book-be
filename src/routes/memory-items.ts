@@ -28,16 +28,19 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       costQualifier?: string | null
       totalCostAmount?: string | null
       uncertaintyResolution?: string
+      budgetCategoryId?: string | null
     }
   }>('/api/jobs/:jobId/memory-items/:memoryItemId', async (request, reply) => {
     const { jobId, memoryItemId } = request.params
     const body = request.body ?? {}
 
-    const missing = (field: string) =>
-      reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: `${field} is required` })
-
-    if (!body.memoryType) return missing('memoryType')
-    if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
+    // A category-only change carries budgetCategoryId and no memoryType; it must
+    // update only the assignment and leave existing memory fields untouched.
+    if (body.memoryType == null) {
+      if (!('budgetCategoryId' in body)) {
+        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType or budgetCategoryId is required' })
+      }
+    } else if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
       return reply.code(400).send({
         code: ErrorCode.INVALID_FIELD,
         message: 'memoryType must be a valid non-unclear memory type',
@@ -54,6 +57,9 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
       return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
+    }
+    if ('budgetCategoryId' in body && body.budgetCategoryId !== null && typeof body.budgetCategoryId !== 'string') {
+      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId must be a string or null' })
     }
 
     try {

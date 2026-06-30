@@ -6,6 +6,7 @@ import {
   formatUnitCostLabel,
   formatLineTotalLabel,
 } from '../lib/cost-utils.js'
+import { assertAssignableCategory } from './budget.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -14,7 +15,7 @@ async function verifyJobOwnership(jobId: string, userId: string) {
 }
 
 export interface MemoryItemPatch {
-  memoryType: string
+  memoryType?: string
   summary?: string | null
   materialName?: string | null
   quantity?: string | null
@@ -27,6 +28,7 @@ export interface MemoryItemPatch {
   costQualifier?: string | null
   totalCostAmount?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
+  budgetCategoryId?: string | null
 }
 
 export async function patchMemoryItem(
@@ -41,6 +43,49 @@ export async function patchMemoryItem(
     where: { id: memoryItemId, jobId },
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  // The final memory type is the patched one (full edit) or the existing one
+  // (category-only edit). A category may only live on ORDERED_MATERIAL memory.
+  const finalMemoryType = patch.memoryType ? patch.memoryType.toUpperCase() : existing.memoryType
+
+  // Category assignment: undefined preserves, null clears, a string must reference
+  // a non-archived category in this same job.
+  let budgetCategoryId = existing.budgetCategoryId
+  if (patch.budgetCategoryId !== undefined) {
+    if (patch.budgetCategoryId === null) {
+      budgetCategoryId = null
+    } else {
+      if (finalMemoryType !== 'ORDERED_MATERIAL') {
+        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material memory' }
+      }
+      await assertAssignableCategory(jobId, patch.budgetCategoryId)
+      budgetCategoryId = patch.budgetCategoryId
+    }
+  }
+
+  // If the memory type is (or becomes) non-ordered, a preserved category is
+  // cleared so trusted memory never carries a category on the wrong type.
+  if (budgetCategoryId !== null && finalMemoryType !== 'ORDERED_MATERIAL') {
+    budgetCategoryId = null
+  }
+
+  // Category-only change: no memoryType means update budgetCategoryId alone and
+  // leave every existing memory field untouched.
+  if (patch.memoryType == null) {
+    const updated = await prisma.memoryItem.update({
+      where: { id: memoryItemId },
+      data: { budgetCategoryId },
+      include: {
+        sourceFact: {
+          include: {
+            sourceNote: { select: { id: true, capturedAt: true } },
+            transcript: { select: { id: true, text: true } },
+          },
+        },
+      },
+    })
+    return normalizeMemoryItem(updated, updated.sourceFact ?? null)
+  }
 
   // Effective cost fields after merging patch with existing
   const effQty = 'quantity' in patch ? (patch.quantity ?? null) : existing.quantity
@@ -72,6 +117,7 @@ export async function patchMemoryItem(
     where: { id: memoryItemId },
     data: {
       memoryType: patch.memoryType.toUpperCase() as never,
+      budgetCategoryId,
       summary: patch.summary ?? existing.summary,
       materialName: 'materialName' in patch ? patch.materialName ?? null : existing.materialName,
       quantity: 'quantity' in patch ? patch.quantity ?? null : existing.quantity,
@@ -138,6 +184,7 @@ function normalizeMemoryItem(
     costQualifier: string | null
     totalCostAmount: string | null
     unresolvedFlags: string[]
+    budgetCategoryId: string | null
     sourceCandidateFactId: string | null
     reviewDecisionId: string
     createdAt: Date
@@ -166,6 +213,7 @@ function normalizeMemoryItem(
     costCurrency: item.costCurrency,
     costQualifier: item.costQualifier,
     totalCostAmount: item.totalCostAmount,
+    budgetCategoryId: item.budgetCategoryId,
     unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
     lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),
     uncertaintyFlags: item.unresolvedFlags,
