@@ -1,6 +1,7 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import {
+  STRICT_DECIMAL_RE,
   deriveSafeLineTotal,
   deriveSafeLabourTotal,
   hasCostConflict,
@@ -16,6 +17,16 @@ async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
   if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+}
+
+// Parse an optional ISO date/time string to a Date, rejecting invalid input.
+function parseHappenedAt(value: string | null | undefined): Date | null {
+  if (value == null || value === '') return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'happenedAt must be a valid ISO date/time' }
+  }
+  return d
 }
 
 export interface MemoryItemPatch {
@@ -34,6 +45,7 @@ export interface MemoryItemPatch {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  happenedAt?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
   budgetCategoryId?: string | null
 }
@@ -142,6 +154,7 @@ export async function patchMemoryItem(
       labourHours: 'labourHours' in patch ? patch.labourHours ?? null : existing.labourHours,
       labourPerson: 'labourPerson' in patch ? patch.labourPerson ?? null : existing.labourPerson,
       labourTask: 'labourTask' in patch ? patch.labourTask ?? null : existing.labourTask,
+      happenedAt: 'happenedAt' in patch ? parseHappenedAt(patch.happenedAt) : existing.happenedAt,
       unresolvedFlags,
     },
     include: {
@@ -199,6 +212,8 @@ function normalizeMemoryItem(
     labourHours: string | null
     labourPerson: string | null
     labourTask: string | null
+    happenedAt: Date | null
+    isManual: boolean
     unresolvedFlags: string[]
     budgetCategoryId: string | null
     sourceCandidateFactId: string | null
@@ -232,6 +247,8 @@ function normalizeMemoryItem(
     labourHours: item.labourHours,
     labourPerson: item.labourPerson,
     labourTask: item.labourTask,
+    happenedAt: item.happenedAt,
+    isManual: item.isManual,
     budgetCategoryId: item.budgetCategoryId,
     unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
     lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),
@@ -251,4 +268,160 @@ function normalizeMemoryItem(
         }
       : null,
   }
+}
+
+// ── Direct add (manual memory) ────────────────────────────────────────────────
+
+export interface CreateMemoryItemInput {
+  memoryType: string
+  summary?: string | null
+  happenedAt?: string | null
+  materialName?: string | null
+  quantity?: string | null
+  unit?: string | null
+  supplierName?: string | null
+  deliveryTiming?: string | null
+  locationOrUse?: string | null
+  costAmount?: string | null
+  costCurrency?: string | null
+  costQualifier?: string | null
+  totalCostAmount?: string | null
+  labourHours?: string | null
+  labourPerson?: string | null
+  labourTask?: string | null
+  budgetCategoryId?: string | null
+}
+
+// Map a lowercase API memory type to its memory-view section key, for the
+// ADD_MISSING ReviewDecision audit record.
+const MEMORY_TYPE_SECTION_KEY: Record<string, string> = {
+  ordered_material: 'ordered_materials',
+  used_material: 'used_materials',
+  leftover_material: 'leftovers',
+  supplier_delivery_note: 'supplier_delivery_notes',
+  customer_change: 'customer_changes',
+  watch_out: 'watch_outs',
+  labour: 'labour',
+  general_note: 'general_notes',
+}
+
+// Ensure every manual item has a non-empty summary: prefer the submitted text,
+// otherwise derive a plain-language one from the section fields.
+function deriveManualSummary(input: CreateMemoryItemInput): string | null {
+  const explicit = input.summary?.trim()
+  if (explicit) return explicit
+
+  const name = input.materialName?.trim()
+  const qty = input.quantity?.trim()
+  const unit = input.unit?.trim()
+  const join = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(' ').trim()
+
+  switch (input.memoryType) {
+    case 'ordered_material':
+      return name ? (join('Bought', qty, unit, name) || name) : null
+    case 'used_material':
+      return name ? (join('Used', qty, unit, name) || name) : null
+    case 'leftover_material':
+      return name ? (join(qty, unit, name, 'left') || name) : null
+    case 'labour': {
+      const person = input.labourPerson?.trim()
+      const hours = input.labourHours?.trim()
+      const task = input.labourTask?.trim()
+      const head = [person, hours ? `${hours} hours` : null].filter(Boolean).join(' — ')
+      const base = head || (task ? 'Labour' : null)
+      if (!base) return null
+      return task ? `${base} · ${task}` : base
+    }
+    default:
+      return null
+  }
+}
+
+export async function createMemoryItem(jobId: string, userId: string, input: CreateMemoryItemInput) {
+  await verifyJobOwnership(jobId, userId)
+
+  const memoryType = input.memoryType.toUpperCase()
+
+  const summary = deriveManualSummary(input)
+  if (!summary) throw { code: ErrorCode.MISSING_FIELD, message: 'summary is required' }
+
+  const happenedAt = parseHappenedAt(input.happenedAt)
+
+  // Default currency to GBP when a cost is present but currency omitted.
+  let costCurrency = input.costCurrency ?? null
+  if (!costCurrency && (input.costAmount || input.totalCostAmount)) costCurrency = 'GBP'
+
+  // A stated total (costQualifier 'total') means costAmount is itself the total.
+  const totalFromTotalQualifier =
+    input.costQualifier === 'total' && input.costAmount && STRICT_DECIMAL_RE.test(input.costAmount)
+      ? input.costAmount
+      : null
+
+  // Preserve an explicit total, else derive from stated total, material each, or
+  // labour per_hour.
+  const totalCostAmount =
+    input.totalCostAmount ??
+    totalFromTotalQualifier ??
+    deriveSafeLineTotal(input.quantity, input.costAmount, input.costQualifier) ??
+    deriveSafeLabourTotal(input.labourHours, input.costAmount, input.costQualifier) ??
+    null
+
+  const unresolvedFlags =
+    hasCostConflict(input.quantity, input.costAmount, input.costQualifier, totalCostAmount)
+      ? ['cost_uncertain']
+      : []
+
+  // Category is only meaningful for spend and labour.
+  let budgetCategoryId: string | null = null
+  if (input.budgetCategoryId != null) {
+    if (!CATEGORY_ELIGIBLE_TYPES.has(memoryType)) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
+    }
+    await assertAssignableCategory(jobId, input.budgetCategoryId)
+    budgetCategoryId = input.budgetCategoryId
+  }
+
+  const created = await prisma.$transaction(async (tx) => {
+    // ADD_MISSING decision keeps the audit trail consistent with reviewed memory.
+    const decision = await tx.reviewDecision.create({
+      data: {
+        jobId,
+        decidedBy: userId,
+        action: 'ADD_MISSING',
+        candidateFactId: null,
+        sectionKey: MEMORY_TYPE_SECTION_KEY[input.memoryType] ?? null,
+        sourceCandidateFactIds: [],
+      },
+    })
+
+    return tx.memoryItem.create({
+      data: {
+        jobId,
+        reviewDecisionId: decision.id,
+        sourceCandidateFactId: null,
+        isManual: true,
+        memoryType: memoryType as never,
+        summary,
+        materialName: input.materialName ?? null,
+        quantity: input.quantity ?? null,
+        unit: input.unit ?? null,
+        supplierName: input.supplierName ?? null,
+        deliveryTiming: input.deliveryTiming ?? null,
+        locationOrUse: input.locationOrUse ?? null,
+        costAmount: input.costAmount ?? null,
+        costCurrency,
+        costQualifier: input.costQualifier ?? null,
+        totalCostAmount,
+        labourHours: input.labourHours ?? null,
+        labourPerson: input.labourPerson ?? null,
+        labourTask: input.labourTask ?? null,
+        happenedAt,
+        unresolvedFlags,
+        budgetCategoryId,
+      },
+    })
+  })
+
+  // Manual memory has no source fact/transcript context.
+  return normalizeMemoryItem(created, null)
 }

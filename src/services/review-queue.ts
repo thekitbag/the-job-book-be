@@ -41,7 +41,7 @@ const SECTION_KEYS = Object.keys(SECTION_LABELS)
 
 const VALID_MEMORY_TYPES = new Set([
   'ordered_material', 'used_material', 'leftover_material',
-  'supplier_delivery_note', 'customer_change', 'watch_out', 'labour',
+  'supplier_delivery_note', 'customer_change', 'watch_out', 'labour', 'general_note',
 ])
 
 // Memory types for which a budget category is meaningful in this slice.
