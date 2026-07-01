@@ -17,6 +17,7 @@ const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
   CUSTOMER_CHANGE: 'customer_changes',
   WATCH_OUT: 'watch_outs',
   LABOUR: 'labour',
+  GENERAL_NOTE: 'general_notes',
 }
 
 // Build a display cost label from stored cost fields (GBP only for now; ISO code fallback)
@@ -426,6 +427,7 @@ const SECTION_CONFIG = [
   { key: 'customer_changes', label: 'Customer changes' },
   { key: 'watch_outs', label: 'Watch outs' },
   { key: 'labour', label: 'Labour' },
+  { key: 'general_notes', label: 'Notes' },
 ] as const
 
 export async function getMemoryView(jobId: string, userId: string) {
@@ -490,6 +492,8 @@ export async function getMemoryView(jobId: string, userId: string) {
         labourHours: m.labourHours,
         labourPerson: m.labourPerson,
         labourTask: m.labourTask,
+        happenedAt: m.happenedAt,
+        isManual: m.isManual,
         budgetCategoryId: m.budgetCategoryId,
         unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
         lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),

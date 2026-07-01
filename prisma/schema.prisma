@@ -159,6 +159,7 @@ enum FactType {
   CUSTOMER_CHANGE
   WATCH_OUT
   LABOUR
+  GENERAL_NOTE
   UNCLEAR
 }
 
@@ -267,6 +268,7 @@ model MemoryItem {
   labourHours           String?
   labourPerson          String?
   labourTask            String?
+  happenedAt            DateTime?
   unresolvedFlags       String[] @default([])
   budgetCategoryId      String?
   createdAt             DateTime @default(now())
