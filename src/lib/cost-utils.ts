@@ -42,8 +42,9 @@ export function formatLineTotalLabel(
   return `${symbol}${totalCostAmount} total`
 }
 
-// Pure derivation: qty × unitCost when qualifier is 'each' and both are strict positives.
-// Does not consult any existing totalCostAmount — caller decides whether to use the result.
+// Pure arithmetic: qty × unitCost when qualifier is 'each' and both are strict
+// positives. Basis-only (no unit/currency); used for conflict detection where the
+// question is purely whether an explicit total disagrees with quantity × unit cost.
 export function deriveSafeLineTotal(
   quantity: string | null | undefined,
   costAmount: string | null | undefined,
@@ -54,6 +55,24 @@ export function deriveSafeLineTotal(
   const cost = strictParsePositive(costAmount)
   if (qty === null || cost === null) return null
   return String(Math.round(qty * cost * 100) / 100)
+}
+
+// Authoritative rule for a *stored* material line total. Derives qty × unit cost
+// only when the whole basis is unambiguous: qualifier 'each', a strict-positive
+// quantity, a present unit, a strict-positive unit cost, and a currency. This is
+// the single derivation used by every write path so stored totals stay consistent
+// (`5 sheets at £20 each` → `100`; `5 at £20 each` with no unit/currency → null).
+export function deriveSafeMaterialTotal(
+  quantity: string | null | undefined,
+  unit: string | null | undefined,
+  costAmount: string | null | undefined,
+  costCurrency: string | null | undefined,
+  costQualifier: string | null | undefined,
+): string | null {
+  if (costQualifier !== 'each') return null
+  if (!unit || unit.trim() === '') return null
+  if (!costCurrency || costCurrency.trim() === '') return null
+  return deriveSafeLineTotal(quantity, costAmount, costQualifier)
 }
 
 // Pure derivation: labourHours × hourlyRate when qualifier is 'per_hour' and both

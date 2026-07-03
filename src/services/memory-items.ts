@@ -2,7 +2,7 @@ import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import {
   STRICT_DECIMAL_RE,
-  deriveSafeLineTotal,
+  deriveSafeMaterialTotal,
   deriveSafeLabourTotal,
   hasCostConflict,
   formatUnitCostLabel,
@@ -108,6 +108,7 @@ export async function patchMemoryItem(
 
   // Effective cost fields after merging patch with existing
   const effQty = 'quantity' in patch ? (patch.quantity ?? null) : existing.quantity
+  const effUnit = 'unit' in patch ? (patch.unit ?? null) : existing.unit
   const effCostAmount = 'costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount
   const effCostCurrency = 'costCurrency' in patch ? (patch.costCurrency ?? null) : existing.costCurrency
   const effCostQualifier = 'costQualifier' in patch ? (patch.costQualifier ?? null) : existing.costQualifier
@@ -115,7 +116,7 @@ export async function patchMemoryItem(
 
   // Re-derive safe line total from effective fields (material each or labour per_hour)
   const derived =
-    deriveSafeLineTotal(effQty, effCostAmount, effCostQualifier) ??
+    deriveSafeMaterialTotal(effQty, effUnit, effCostAmount, effCostCurrency, effCostQualifier) ??
     deriveSafeLabourTotal(effLabourHours, effCostAmount, effCostQualifier)
 
   // Explicit patch value wins; otherwise use derived or preserve existing
@@ -362,7 +363,7 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   const totalCostAmount =
     input.totalCostAmount ??
     totalFromTotalQualifier ??
-    deriveSafeLineTotal(input.quantity, input.costAmount, input.costQualifier) ??
+    deriveSafeMaterialTotal(input.quantity, input.unit, input.costAmount, costCurrency, input.costQualifier) ??
     deriveSafeLabourTotal(input.labourHours, input.costAmount, input.costQualifier) ??
     null
 

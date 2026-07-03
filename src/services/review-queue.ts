@@ -4,8 +4,9 @@ import { ErrorCode } from '../types/errors.js'
 import {
   formatUnitCostLabel,
   formatLineTotalLabel,
-  deriveSafeLineTotal,
+  deriveSafeMaterialTotal,
   deriveSafeLabourTotal,
+  hasCostConflict,
 } from '../lib/cost-utils.js'
 import {
   getActiveBudgetCategories,
@@ -591,8 +592,6 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   if (payload.action === 'correct') {
     const { corrected } = payload
     const memoryType = (corrected.memoryType.toUpperCase()) as never
-    const unresolvedFlags =
-      payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
 
     const budgetCategoryId = await resolveDecisionCategory(
       jobId, corrected.memoryType.toLowerCase(), payload.budgetCategoryId, corrected.budgetCategoryId,
@@ -601,9 +600,16 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     // Preserve an explicit total, else safely derive from material each or labour per_hour.
     const correctedTotalCostAmount =
       corrected.totalCostAmount ??
-      deriveSafeLineTotal(corrected.quantity, corrected.costAmount, corrected.costQualifier) ??
+      deriveSafeMaterialTotal(corrected.quantity, corrected.unit, corrected.costAmount, corrected.costCurrency, corrected.costQualifier) ??
       deriveSafeLabourTotal(corrected.labourHours, corrected.costAmount, corrected.costQualifier) ??
       null
+
+    // An explicit total that conflicts with quantity × unit cost must stay worth
+    // checking, even if the reviewer marked the item resolved.
+    const conflict = hasCostConflict(corrected.quantity, corrected.costAmount, corrected.costQualifier, correctedTotalCostAmount)
+    const baseFlags = payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
+    const unresolvedFlags =
+      conflict && !baseFlags.includes('cost_uncertain') ? [...baseFlags, 'cost_uncertain'] : baseFlags
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })

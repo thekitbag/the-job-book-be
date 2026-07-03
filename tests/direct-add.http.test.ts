@@ -237,3 +237,60 @@ describe('direct-add items in memory-view and budget-summary', () => {
     expect(res.json<any>().happenedAt).toBeTruthy()
   })
 })
+
+describe('auto-total unit cost — direct add and patch derivation', () => {
+  function existing(overrides: any) {
+    return {
+      id: 'm1', jobId: JOB_ID, reviewDecisionId: 'rd-1', sourceCandidateFactId: null, isManual: true,
+      memoryType: 'ORDERED_MATERIAL', summary: 'timber', materialName: 'timber', quantity: '5', unit: 'sheets',
+      supplierName: null, deliveryTiming: null, locationOrUse: null, costAmount: '20', costCurrency: 'GBP',
+      costQualifier: 'each', totalCostAmount: '100', labourHours: null, labourPerson: null, labourTask: null,
+      happenedAt: null, unresolvedFlags: [], budgetCategoryId: null, createdAt: new Date(), updatedAt: new Date(),
+      ...overrides,
+    }
+  }
+
+  it('direct add derives a line total from quantity × each unit cost', async () => {
+    const res = await post({ memoryType: 'ordered_material', materialName: 'OSB', quantity: '5', unit: 'sheets', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each' })
+    expect(res.statusCode).toBe(201)
+    expect(res.json<any>().totalCostAmount).toBe('100')
+  })
+
+  it('direct add does not derive a total when the unit is missing', async () => {
+    const res = await post({ memoryType: 'ordered_material', materialName: 'OSB', quantity: '5', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each' })
+    expect(res.json<any>().totalCostAmount).toBeNull()
+  })
+
+  it('direct add flags a conflicting explicit total as cost_uncertain', async () => {
+    const res = await post({ memoryType: 'ordered_material', materialName: 'OSB', quantity: '5', unit: 'sheets', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '999' })
+    const body = res.json<any>()
+    expect(body.totalCostAmount).toBe('999')
+    expect(body.uncertaintyFlags).toContain('cost_uncertain')
+  })
+
+  it('patch omitting totalCostAmount recalculates from effective quantity × unit cost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(existing({}))
+    vi.mocked(prisma.memoryItem.update as any).mockImplementation(async ({ data }: any) => ({ ...existing({}), ...data, sourceFact: null }))
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}/memory-items/m1`, headers, payload: { memoryType: 'ordered_material', summary: 'timber', quantity: '6' } })
+    expect(res.statusCode).toBe(200)
+    expect(vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0].data.totalCostAmount).toBe('120')
+  })
+
+  it('patch with totalCostAmount:null clears the total rather than deriving', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(existing({}))
+    vi.mocked(prisma.memoryItem.update as any).mockImplementation(async ({ data }: any) => ({ ...existing({}), ...data, sourceFact: null }))
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}/memory-items/m1`, headers, payload: { memoryType: 'ordered_material', summary: 'timber', quantity: '6', totalCostAmount: null } })
+    expect(res.statusCode).toBe(200)
+    expect(vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+  })
+
+  it('patch with a conflicting explicit total keeps it worth checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(existing({}))
+    vi.mocked(prisma.memoryItem.update as any).mockImplementation(async ({ data }: any) => ({ ...existing({}), ...data, sourceFact: null }))
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}/memory-items/m1`, headers, payload: { memoryType: 'ordered_material', summary: 'timber', quantity: '5', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '999' } })
+    expect(res.json<any>().uncertaintyFlags).toContain('cost_uncertain')
+  })
+})

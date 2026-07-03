@@ -5,8 +5,34 @@ import {
   formatUnitCostLabel,
   formatLineTotalLabel,
   deriveSafeLineTotal,
+  deriveSafeMaterialTotal,
   hasCostConflict,
 } from '../src/lib/cost-utils.js'
+
+// ── deriveSafeMaterialTotal (authoritative stored-total rule) ──────────────────
+
+describe('deriveSafeMaterialTotal', () => {
+  it('derives when quantity, unit, each unit cost, and currency are all clear', () => {
+    expect(deriveSafeMaterialTotal('5', 'sheets', '20', 'GBP', 'each')).toBe('100')
+    expect(deriveSafeMaterialTotal('2.5', 'm', '4', 'GBP', 'each')).toBe('10')
+  })
+  it('does not derive without a unit', () => {
+    expect(deriveSafeMaterialTotal('5', null, '20', 'GBP', 'each')).toBeNull()
+    expect(deriveSafeMaterialTotal('5', '   ', '20', 'GBP', 'each')).toBeNull()
+  })
+  it('does not derive without a currency', () => {
+    expect(deriveSafeMaterialTotal('5', 'sheets', '20', null, 'each')).toBeNull()
+  })
+  it('does not derive for non-each qualifiers', () => {
+    for (const q of ['total', 'approx', 'unknown', 'per_hour', null]) {
+      expect(deriveSafeMaterialTotal('5', 'sheets', '20', 'GBP', q)).toBeNull()
+    }
+  })
+  it('does not derive for a non-numeric or non-positive quantity', () => {
+    expect(deriveSafeMaterialTotal('about 5', 'sheets', '20', 'GBP', 'each')).toBeNull()
+    expect(deriveSafeMaterialTotal('0', 'sheets', '20', 'GBP', 'each')).toBeNull()
+  })
+})
 
 // ── STRICT_DECIMAL_RE ─────────────────────────────────────────────────────────
 
