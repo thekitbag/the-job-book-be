@@ -54,7 +54,11 @@ function reviewState(status: string, hasDecisions: boolean): string {
 
 // ── Main inspection assembler ─────────────────────────────────────────────────
 
-export async function getJobInspection(jobId: string, userId: string) {
+export async function getJobInspection(
+  jobId: string,
+  userId: string,
+  opts: { allowCrossUser?: boolean } = {},
+) {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: {
@@ -70,7 +74,9 @@ export async function getJobInspection(jobId: string, userId: string) {
   })
 
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
-  if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+  if (job.ownerUserId !== userId && !opts.allowCrossUser) {
+    throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+  }
 
   const [notes, decisions, memoryItems] = await Promise.all([
     prisma.rawNote.findMany({

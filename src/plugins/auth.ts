@@ -1,60 +1,28 @@
 import fp from 'fastify-plugin'
 import type { FastifyPluginAsync } from 'fastify'
-import { prisma } from '../db/client.js'
-import { verifySessionToken } from '../lib/session.js'
-import { getSessionCookieSecret } from '../config/production.js'
+import { resolveRequestUser } from '../lib/request-auth.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
     userId: string
+    userRole: string
   }
 }
 
-const COOKIE_NAME = 'pilot_session'
-
 const authPlugin: FastifyPluginAsync = async (fastify) => {
   fastify.decorateRequest('userId', '')
+  fastify.decorateRequest('userRole', '')
 
   fastify.addHook('preHandler', async (request, reply) => {
     if (request.url === '/health') return
     // Auth endpoints handle their own auth
     if (request.url.startsWith('/api/auth/')) return
 
-    const secret = getSessionCookieSecret(process.env)
-
-    // 1. Session cookie — primary auth (dev + production)
-    const sessionCookie = request.cookies?.[COOKIE_NAME]
-    if (sessionCookie) {
-      const payload = verifySessionToken(sessionCookie, secret)
-      if (payload) {
-        const user = await prisma.user.findUnique({ where: { id: payload.userId } })
-        if (user) {
-          request.userId = user.id
-          return
-        }
-      }
-      // Cookie present but invalid/expired — fall through to header check in dev, or reject in production
-      if (process.env.NODE_ENV === 'production') {
-        reply.code(401).send({ code: 'UNAUTHORIZED', message: 'Invalid or expired session' })
-        return
-      }
-    }
-
-    // 2. X-Pilot-User-Id header — dev only
-    if (process.env.NODE_ENV !== 'production') {
-      const headerUserId =
-        typeof request.headers['x-pilot-user-id'] === 'string' &&
-        request.headers['x-pilot-user-id'].length > 0
-          ? request.headers['x-pilot-user-id']
-          : process.env.PILOT_USER_ID
-
-      if (headerUserId) {
-        const user = await prisma.user.findUnique({ where: { id: headerUserId } })
-        if (user) {
-          request.userId = user.id
-          return
-        }
-      }
+    const user = await resolveRequestUser(request)
+    if (user) {
+      request.userId = user.id
+      request.userRole = user.role
+      return
     }
 
     reply.code(401).send({ code: 'UNAUTHORIZED', message: 'No valid session' })

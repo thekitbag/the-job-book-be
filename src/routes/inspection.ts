@@ -14,13 +14,19 @@ const inspectionRoutes: FastifyPluginAsync = async (fastify) => {
         if (process.env.NODE_ENV === 'production') {
           return reply.code(401).send({ code: 'UNAUTHORIZED', message: 'Inspection not available' })
         }
-        // dev/test: allow without env var set
+        // dev/test: allow without env var set (own jobs only — see allowCrossUser)
       } else if (keyStr !== expectedKey) {
         return reply.code(401).send({ code: 'UNAUTHORIZED', message: 'Invalid inspection key' })
       }
 
+      // Deliberate internal support path: cross-user inspection requires BOTH an
+      // INTERNAL user session AND a valid configured inspection key. Everyone
+      // else (including internal users without the key) is limited to own jobs.
+      const allowCrossUser =
+        request.userRole === 'INTERNAL' && Boolean(expectedKey) && keyStr === expectedKey
+
       try {
-        const data = await getJobInspection(request.params.jobId, request.userId)
+        const data = await getJobInspection(request.params.jobId, request.userId, { allowCrossUser })
         return reply.send(data)
       } catch (err: unknown) {
         return handleServiceError(err, reply)

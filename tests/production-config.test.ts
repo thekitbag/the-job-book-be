@@ -7,9 +7,11 @@ function validProductionEnv(): NodeJS.ProcessEnv {
   return {
     NODE_ENV: 'production',
     SESSION_COOKIE_SECRET: 'a-very-long-random-secret-value-for-the-pilot-32c',
-    PILOT_PASSCODE: 'field-pilot-strong-passcode-2026',
-    PILOT_USER_ID: 'usr_mike_pilot_123',
     INTERNAL_INSPECTION_KEY: 'inspect-random-key-value-24chars!!',
+    EMAIL_PROVIDER: 'resend',
+    RESEND_API_KEY: 're_test_key_xxxx',
+    EMAIL_FROM: 'The Job Book <no-reply@thejobbook.app>',
+    PASSWORD_RESET_URL_BASE: 'https://thejobbook.app/reset-password',
     FRONTEND_ORIGIN: 'https://thejobbook.app',
     DATABASE_URL: 'postgresql://user:pass@db.render.com:5432/jobbook_prod',
     AUDIO_STORAGE_PROVIDER: 'r2',
@@ -57,34 +59,47 @@ describe('validateProductionConfig', () => {
     })).toThrow('SESSION_COOKIE_SECRET')
   })
 
-  // PILOT_PASSCODE
-  it('rejects missing PILOT_PASSCODE', () => {
+  // Legacy passcode auth must be fully retired
+  it('rejects a production env that still sets PILOT_PASSCODE', () => {
+    expect(() => validateProductionConfig({
+      ...validProductionEnv(),
+      PILOT_PASSCODE: 'field-pilot-strong-passcode-2026',
+    })).toThrow('PILOT_PASSCODE')
+  })
+
+  it('does not require PILOT_USER_ID (no production fallback auth)', () => {
     const env = validProductionEnv()
-    delete env.PILOT_PASSCODE
-    expect(() => validateProductionConfig(env)).toThrow('PILOT_PASSCODE')
+    delete env.PILOT_USER_ID
+    expect(() => validateProductionConfig(env)).not.toThrow()
   })
 
-  it('rejects weak default PILOT_PASSCODE "change-me"', () => {
-    expect(() => validateProductionConfig({
-      ...validProductionEnv(),
-      PILOT_PASSCODE: 'change-me',
-    })).toThrow('PILOT_PASSCODE')
+  // Password-reset email provider
+  it('rejects missing/dev EMAIL_PROVIDER', () => {
+    const env = validProductionEnv()
+    delete env.EMAIL_PROVIDER
+    expect(() => validateProductionConfig(env)).toThrow('EMAIL_PROVIDER')
+    expect(() => validateProductionConfig({ ...validProductionEnv(), EMAIL_PROVIDER: 'dev' }))
+      .toThrow('EMAIL_PROVIDER')
   })
 
-  it('rejects short PILOT_PASSCODE under 12 chars', () => {
-    expect(() => validateProductionConfig({
-      ...validProductionEnv(),
-      PILOT_PASSCODE: 'shortpass',
-    })).toThrow('PILOT_PASSCODE')
+  it('rejects resend without RESEND_API_KEY or EMAIL_FROM', () => {
+    const noKey = validProductionEnv()
+    delete noKey.RESEND_API_KEY
+    expect(() => validateProductionConfig(noKey)).toThrow('RESEND_API_KEY')
+
+    const noFrom = validProductionEnv()
+    delete noFrom.EMAIL_FROM
+    expect(() => validateProductionConfig(noFrom)).toThrow('EMAIL_FROM')
   })
 
-  it('rejects PILOT_PASSCODE equal to SESSION_COOKIE_SECRET', () => {
-    const secret = 'a-very-long-random-secret-value-for-the-pilot-32c'
+  it('rejects missing or non-HTTPS PASSWORD_RESET_URL_BASE', () => {
+    const env = validProductionEnv()
+    delete env.PASSWORD_RESET_URL_BASE
+    expect(() => validateProductionConfig(env)).toThrow('PASSWORD_RESET_URL_BASE')
     expect(() => validateProductionConfig({
       ...validProductionEnv(),
-      SESSION_COOKIE_SECRET: secret,
-      PILOT_PASSCODE: secret,
-    })).toThrow('PILOT_PASSCODE')
+      PASSWORD_RESET_URL_BASE: 'http://thejobbook.app/reset-password',
+    })).toThrow('PASSWORD_RESET_URL_BASE')
   })
 
   // INTERNAL_INSPECTION_KEY
@@ -189,11 +204,11 @@ describe('validateProductionConfig', () => {
   })
 
   // INTERNAL_INSPECTION_KEY equality guard
-  it('rejects INTERNAL_INSPECTION_KEY equal to PILOT_PASSCODE', () => {
+  it('rejects INTERNAL_INSPECTION_KEY equal to SESSION_COOKIE_SECRET', () => {
     const shared = 'shared-key-that-is-long-enough-for-both!!'
     expect(() => validateProductionConfig({
       ...validProductionEnv(),
-      PILOT_PASSCODE: shared,
+      SESSION_COOKIE_SECRET: shared,
       INTERNAL_INSPECTION_KEY: shared,
     })).toThrow('INTERNAL_INSPECTION_KEY')
   })
@@ -261,6 +276,7 @@ describe('validateProductionConfig', () => {
     expect(error).toBeDefined()
     expect(error!.message).toContain('SESSION_COOKIE_SECRET')
     expect(error!.message).toContain('PILOT_PASSCODE')
+    expect(error!.message).toContain('EMAIL_PROVIDER')
     expect(error!.message).toContain('AUDIO_STORAGE_PROVIDER')
     expect(error!.message).toContain('TRANSCRIPTION_PROVIDER')
     expect(error!.message).toContain('FRONTEND_ORIGIN')

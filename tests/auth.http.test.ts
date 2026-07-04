@@ -1,14 +1,17 @@
+// Auth plugin behaviour (mocked prisma): session cookie handling, legacy cookie
+// acceptance, production fallback rejection, CORS. Account endpoints (signup/
+// login/reset) are covered against the real DB in auth-accounts.http.test.ts.
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { FakeAudioStorage } from './fakes/storage.js'
 import { FakeTranscriptionProvider } from '../src/transcription/fake.js'
 import { FakeExtractionProvider } from '../src/extraction/fake.js'
+import { DevEmailProvider } from '../src/email/index.js'
 import { createSessionToken } from '../src/lib/session.js'
 
 const USER_ID = 'auth-user-1'
 const JOB_ID = 'auth-job-1'
-const TEST_PASSCODE = 'test-passcode-123'
 const TEST_SECRET = 'test-session-secret-long-enough!!'
 
 vi.mock('../src/db/client.js', () => ({
@@ -21,12 +24,13 @@ vi.mock('../src/db/client.js', () => ({
     candidateFact: { findMany: vi.fn() },
     reviewDecision: { create: vi.fn() },
     memoryItem: { findMany: vi.fn() },
+    passwordResetToken: { create: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
     $transaction: vi.fn(),
   },
 }))
 
 function makeUser() {
-  return { id: USER_ID, email: 'pilot@test.local', name: 'Pilot', role: 'PILOT', createdAt: new Date(), updatedAt: new Date() }
+  return { id: USER_ID, email: 'pilot@test.local', name: 'Pilot', role: 'PILOT', passwordHash: null, createdAt: new Date(), updatedAt: new Date() }
 }
 
 function makeJob() {
@@ -41,6 +45,7 @@ beforeAll(async () => {
     storage: new FakeAudioStorage(),
     transcription: new FakeTranscriptionProvider(),
     extraction: new FakeExtractionProvider(),
+    email: new DevEmailProvider(),
   })
   await app.ready()
 })
@@ -51,7 +56,6 @@ beforeEach(async () => {
   vi.clearAllMocks()
 
   savedEnv = {
-    PILOT_PASSCODE: process.env.PILOT_PASSCODE,
     PILOT_USER_ID: process.env.PILOT_USER_ID,
     SESSION_COOKIE_SECRET: process.env.SESSION_COOKIE_SECRET,
     FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN,
@@ -59,7 +63,6 @@ beforeEach(async () => {
     COOKIE_DOMAIN: process.env.COOKIE_DOMAIN,
   }
 
-  process.env.PILOT_PASSCODE = TEST_PASSCODE
   process.env.PILOT_USER_ID = USER_ID
   process.env.SESSION_COOKIE_SECRET = TEST_SECRET
   process.env.FRONTEND_ORIGIN = 'https://thejobbook.app'
@@ -90,73 +93,34 @@ describe('GET /health', () => {
   })
 })
 
-// ─── POST /api/auth/pilot-login ───────────────────────────────────────────────
+// ─── Legacy pilot passcode route ─────────────────────────────────────────────
 
 describe('POST /api/auth/pilot-login', () => {
-  it('returns ok and sets session cookie on correct passcode', async () => {
+  it('no longer exists', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/pilot-login',
       headers: { 'content-type': 'application/json' },
-      payload: { passcode: TEST_PASSCODE },
+      payload: { passcode: 'anything' },
     })
-
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toMatchObject({ ok: true })
-    expect(res.headers['set-cookie']).toBeDefined()
-    expect(res.headers['set-cookie']).toMatch(/pilot_session=/)
-    expect(res.headers['set-cookie']).toMatch(/HttpOnly/i)
-  })
-
-  it('returns 401 on wrong passcode', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/pilot-login',
-      headers: { 'content-type': 'application/json' },
-      payload: { passcode: 'wrong-passcode' },
-    })
-
-    expect(res.statusCode).toBe(401)
-    expect(res.headers['set-cookie']).toBeUndefined()
-  })
-
-  it('returns 400 when passcode is missing', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/pilot-login',
-      headers: { 'content-type': 'application/json' },
-      payload: {},
-    })
-
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD' })
-  })
-
-  it('does not require session cookie or user header to call', async () => {
-    // Login endpoint must be accessible without auth
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/pilot-login',
-      headers: { 'content-type': 'application/json' },
-      payload: { passcode: TEST_PASSCODE },
-    })
-
-    expect(res.statusCode).not.toBe(401)
+    expect(res.statusCode).toBe(404)
   })
 })
 
 // ─── POST /api/auth/logout ────────────────────────────────────────────────────
 
 describe('POST /api/auth/logout', () => {
-  it('clears the session cookie', async () => {
+  it('clears the session cookie and the legacy pilot cookie', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/auth/logout' })
 
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({ ok: true })
-    const setCookie = res.headers['set-cookie'] as string | undefined
-    expect(setCookie).toMatch(/pilot_session=/)
+    const setCookie = res.headers['set-cookie']
+    const cleared = (Array.isArray(setCookie) ? setCookie : [String(setCookie)]).join('\n')
+    expect(cleared).toMatch(/jobbook_session=/)
+    expect(cleared).toMatch(/pilot_session=/)
     // Clearing is done by setting MaxAge=0 or Expires in the past
-    expect(setCookie).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
+    expect(cleared).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
   })
 
   it('production: clearing cookie carries matching Domain/Secure/SameSite so browser deletes it', async () => {
@@ -166,14 +130,16 @@ describe('POST /api/auth/logout', () => {
     const res = await app.inject({ method: 'POST', url: '/api/auth/logout' })
 
     expect(res.statusCode).toBe(200)
-    const setCookie = res.headers['set-cookie'] as string
-    expect(setCookie).toMatch(/pilot_session=/)
-    expect(setCookie).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
-    expect(setCookie).toMatch(/HttpOnly/i)
-    expect(setCookie).toMatch(/Secure/i)
-    expect(setCookie).toMatch(/SameSite=None/i)
-    expect(setCookie).toMatch(/Domain=\.thejobbook\.app/i)
-    expect(setCookie).toMatch(/Path=\//i)
+    const setCookie = res.headers['set-cookie']
+    const cookies = Array.isArray(setCookie) ? setCookie : [String(setCookie)]
+    for (const cookie of cookies) {
+      expect(cookie).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
+      expect(cookie).toMatch(/HttpOnly/i)
+      expect(cookie).toMatch(/Secure/i)
+      expect(cookie).toMatch(/SameSite=None/i)
+      expect(cookie).toMatch(/Domain=\.thejobbook\.app/i)
+      expect(cookie).toMatch(/Path=\//i)
+    }
   })
 })
 
@@ -181,6 +147,19 @@ describe('POST /api/auth/logout', () => {
 
 describe('Cookie-based auth', () => {
   it('grants access to protected route with valid session cookie', async () => {
+    const token = createSessionToken(USER_ID, TEST_SECRET)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${JOB_ID}`,
+      headers: { Cookie: `jobbook_session=${token}` },
+    })
+
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('accepts a valid legacy pilot_session cookie (live session survives cutover)', async () => {
+    process.env.NODE_ENV = 'production'
     const token = createSessionToken(USER_ID, TEST_SECRET)
 
     const res = await app.inject({
@@ -212,7 +191,7 @@ describe('Cookie-based auth', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/jobs/${JOB_ID}`,
-      headers: { Cookie: 'pilot_session=tampered.badsignature' },
+      headers: { Cookie: 'jobbook_session=tampered.badsignature' },
     })
 
     expect(res.statusCode).toBe(401)
@@ -232,7 +211,7 @@ describe('Cookie-based auth', () => {
     const res = await app.inject({
       method: 'GET',
       url: `/api/jobs/${JOB_ID}`,
-      headers: { Cookie: `pilot_session=${expiredToken}` },
+      headers: { Cookie: `jobbook_session=${expiredToken}` },
     })
 
     expect(res.statusCode).toBe(401)
@@ -264,6 +243,18 @@ describe('Cookie-based auth', () => {
     expect(res.json()).toMatchObject({ code: 'UNAUTHORIZED' })
   })
 
+  it('production: GET /api/auth/me is rejected without a cookie even with dev fallbacks set', async () => {
+    process.env.NODE_ENV = 'production'
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { 'x-pilot-user-id': USER_ID },
+    })
+
+    expect(res.statusCode).toBe(401)
+  })
+
   it('dev: X-Pilot-User-Id header still works when NODE_ENV is not production', async () => {
     delete process.env.NODE_ENV
 
@@ -287,7 +278,7 @@ describe('CORS', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/health',
-      headers: { Origin: 'https://thejobbook.app', Cookie: `pilot_session=${token}` },
+      headers: { Origin: 'https://thejobbook.app', Cookie: `jobbook_session=${token}` },
     })
 
     expect(res.headers['access-control-allow-origin']).toBe('https://thejobbook.app')
