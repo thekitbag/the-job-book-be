@@ -743,3 +743,50 @@ describe('runExtraction — labour facts', () => {
     expect(d.labourHours).toBeNull()
   })
 })
+
+describe('runExtraction — safe material total derivation', () => {
+  // Minimal stub provider returning one fact.
+  function providerWith(fact: any) {
+    return {
+      name: 'stub', model: 'stub-v1',
+      async extractFacts() { return { facts: [fact], schemaVersion: 'v1' } },
+    } as any
+  }
+  function dataFor(prisma: any, needle: string) {
+    return vi.mocked(prisma.candidateFact.create as any).mock.calls
+      .map((c: any) => c[0].data).find((d: any) => d.summary.includes(needle))
+  }
+
+  it('derives a line total for clear quantity × each unit cost with unit and currency', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+    // fake fixture: 8 bags of hardcore at £5 each
+    expect(dataFor(prisma, 'hardcore').totalCostAmount).toBe('40')
+  })
+
+  it('does not derive a total when the unit is missing', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, providerWith({
+      factType: 'ordered_material', summary: '5 OSB at £20 each, no unit',
+      materialName: 'OSB', quantity: '5', unit: null,
+      costAmount: '20', costCurrency: 'GBP', costQualifier: 'each',
+      confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
+    }))
+    const { prisma: p2 } = await import('../src/db/client.js')
+    expect(vi.mocked(p2.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+  })
+
+  it('does not derive a total when the currency is missing', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
+    await runExtraction(TRANSCRIPT_ID, providerWith({
+      factType: 'ordered_material', summary: '5 sheets at 20 each, no currency',
+      materialName: 'OSB', quantity: '5', unit: 'sheets',
+      costAmount: '20', costCurrency: null, costQualifier: 'each',
+      confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
+    }))
+    expect(vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+  })
+})

@@ -1,7 +1,7 @@
 import { prisma } from '../db/client.js'
 import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
-import { strictParsePositive, deriveSafeLineTotal, deriveSafeLabourTotal, hasCostConflict } from '../lib/cost-utils.js'
+import { strictParsePositive, deriveSafeMaterialTotal, deriveSafeLabourTotal, hasCostConflict } from '../lib/cost-utils.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -17,7 +17,7 @@ function toDbConfidence(cl: string): string {
 function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
   if (fact.totalCostAmount) return fact.totalCostAmount
   const derived =
-    deriveSafeLineTotal(fact.quantity, fact.costAmount, fact.costQualifier) ??
+    deriveSafeMaterialTotal(fact.quantity, fact.unit, fact.costAmount, fact.costCurrency, fact.costQualifier) ??
     deriveSafeLabourTotal(fact.labourHours, fact.costAmount, fact.costQualifier)
   return derived ?? undefined
 }

@@ -1462,3 +1462,41 @@ describe('review-queue — labour', () => {
     expect(ar.labourTask).toBe('electrics')
   })
 })
+
+// ── Auto-total unit cost (derivation into trusted memory) ─────────────────────
+
+describe('review decisions — auto-total unit cost', () => {
+  const post = (payload: any) =>
+    app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload })
+
+  function orderedQueueItem(pm: any) {
+    return makeQueueItem({
+      sectionKey: 'ordered_materials',
+      proposedMemory: { memoryType: 'ordered_material', summary: 'OSB', materialName: 'OSB', quantity: '5', unit: 'sheets', supplierName: null, deliveryTiming: null, locationOrUse: null, costAmount: '20', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '100', ...pm },
+    })
+  }
+
+  it('confirm persists the derived total from proposed memory', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(orderedQueueItem({}))
+    const res = await post({ queueItemId: ITEM_ID, action: 'confirm' })
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '100' }) }))
+  })
+
+  it('correct recalculates the total from corrected quantity × unit cost', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(orderedQueueItem({}))
+    const res = await post({ queueItemId: ITEM_ID, action: 'correct', corrected: { memoryType: 'ordered_material', summary: '10 OSB at £20 each', materialName: 'OSB', quantity: '10', unit: 'sheets', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each' } })
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '200' }) }))
+  })
+
+  it('correct with a conflicting explicit total keeps the item worth checking', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(orderedQueueItem({}))
+    const res = await post({ queueItemId: ITEM_ID, action: 'correct', uncertaintyResolution: 'resolved', corrected: { memoryType: 'ordered_material', summary: 'OSB', materialName: 'OSB', quantity: '5', unit: 'sheets', costAmount: '20', costCurrency: 'GBP', costQualifier: 'each', totalCostAmount: '999' } })
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '999', unresolvedFlags: expect.arrayContaining(['cost_uncertain']) }) }))
+  })
+})
