@@ -123,6 +123,39 @@ describe('POST /api/auth/logout', () => {
     expect(cleared).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
   })
 
+  it('legacy-only session: logout clears pilot_session and /me without cookies returns 401', async () => {
+    process.env.NODE_ENV = 'production'
+    const token = createSessionToken(USER_ID, TEST_SECRET)
+
+    // Legacy cookie alone authenticates before logout
+    const meBefore = await app.inject({
+      method: 'GET',
+      url: '/api/auth/me',
+      headers: { Cookie: `pilot_session=${token}` },
+    })
+    expect(meBefore.statusCode).toBe(200)
+
+    // Logout with only the legacy cookie present must emit a clearing
+    // Set-Cookie for pilot_session (not just jobbook_session), otherwise the
+    // browser keeps it and the user re-authenticates on refresh.
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      headers: { Cookie: `pilot_session=${token}` },
+    })
+    expect(logout.statusCode).toBe(200)
+    const setCookie = logout.headers['set-cookie']
+    const cookies = Array.isArray(setCookie) ? setCookie : [String(setCookie)]
+    const legacyClear = cookies.find((c) => c.startsWith('pilot_session='))
+    expect(legacyClear).toBeDefined()
+    expect(legacyClear).toMatch(/^pilot_session=;/)
+    expect(legacyClear).toMatch(/Max-Age=0|Expires=Thu, 01 Jan 1970/i)
+
+    // After the browser drops the cookie, the session is gone
+    const meAfter = await app.inject({ method: 'GET', url: '/api/auth/me' })
+    expect(meAfter.statusCode).toBe(401)
+  })
+
   it('production: clearing cookie carries matching Domain/Secure/SameSite so browser deletes it', async () => {
     process.env.NODE_ENV = 'production'
     process.env.COOKIE_DOMAIN = '.thejobbook.app'
