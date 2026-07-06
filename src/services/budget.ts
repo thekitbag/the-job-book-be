@@ -1,11 +1,8 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
-import {
-  STRICT_DECIMAL_RE,
-  strictParsePositive,
-  formatLineTotalLabel,
-  resolveSpendItemLabel,
-} from '../lib/cost-utils.js'
+import { STRICT_DECIMAL_RE } from '../lib/cost-utils.js'
+import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
+import type { IncludedSpendRow } from '../lib/spend-classification.js'
 
 // ── Ownership ─────────────────────────────────────────────────────────────────
 
@@ -152,69 +149,25 @@ export async function patchBudgetCategory(
 
 // ── Budget summary ────────────────────────────────────────────────────────────
 
-interface SpendItem {
-  id: string
-  memoryType: string
-  summary: string
-  materialName: string | null
-  quantity: string | null
-  unit: string | null
-  labourHours: string | null
-  labourPerson: string | null
-  labourTask: string | null
-  costCurrency: string | null
-  totalCostAmount: string | null
-  unresolvedFlags: string[]
-  budgetCategoryId: string | null
-}
-
-// Memory types that carry a monetary line total into known cost.
-const SPEND_MEMORY_TYPES = new Set(['ORDERED_MATERIAL', 'LABOUR'])
-
-// A memory item counts toward known cost only when it is a trusted bought/ordered
-// or labour item with a safe GBP line total and no unresolved flags. For labour
-// the per_hour total is already derived at write time, so checking totalCostAmount
-// is sufficient. This is the same rule memory-view uses, so the summaries agree.
-function isSafeGbpSpend(item: SpendItem): boolean {
-  return (
-    SPEND_MEMORY_TYPES.has(item.memoryType) &&
-    item.unresolvedFlags.length === 0 &&
-    item.costCurrency === 'GBP' &&
-    !!item.totalCostAmount
-  )
-}
-
-function toSpendRow(item: SpendItem) {
-  const total = item.totalCostAmount as string
-  const currency = item.costCurrency as string
-  return {
-    memoryItemId: item.id,
-    memoryType: item.memoryType.toLowerCase(),
-    // Prefer materialName for bought items, labourTask for labour, then summary.
-    itemLabel: resolveSpendItemLabel(item.materialName ?? item.labourTask, item.summary),
-    materialName: item.materialName,
-    quantity: item.quantity,
-    unit: item.unit,
-    labourHours: item.labourHours,
-    labourPerson: item.labourPerson,
-    labourTask: item.labourTask,
-    lineTotalAmount: total,
-    lineTotalCurrency: currency,
-    lineTotalLabel: formatLineTotalLabel(total, currency) ?? `${gbp(total)} total`,
-  }
+// Inclusion rules live in the shared classifier (lib/spend-classification.ts) so
+// this summary and memory-view's costSummary can never disagree. The budget row
+// is the classifier's included row minus budgetCategoryId (used for grouping,
+// not exposed) with memoryType lowercased for the wire.
+function toSpendRow({ budgetCategoryId: _grouping, ...row }: IncludedSpendRow) {
+  return { ...row, memoryType: row.memoryType.toLowerCase() }
 }
 
 type SpendRow = ReturnType<typeof toSpendRow>
 
 function sumRows(rows: SpendRow[]): number {
-  return rows.reduce((acc, r) => acc + (strictParsePositive(r.lineTotalAmount) ?? 0), 0)
+  return parseAmount(sumKnownSpend(rows.map((r) => r.lineTotalAmount))) ?? 0
 }
 
 function spendBlock(rows: SpendRow[]) {
   if (rows.length === 0) {
     return { knownSpendAmount: null, knownSpendCurrency: null, knownSpendLabel: null }
   }
-  const amount = String(round2(sumRows(rows)))
+  const amount = sumKnownSpend(rows.map((r) => r.lineTotalAmount)) as string
   return {
     knownSpendAmount: amount,
     knownSpendCurrency: 'GBP',
@@ -248,19 +201,22 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     prisma.memoryItem.findMany({ where: { jobId, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR'] } } }),
   ])
 
-  const safe = (items as SpendItem[]).filter(isSafeGbpSpend)
+  const safe = items
+    .map(classifySpend)
+    .filter((c): c is Extract<ReturnType<typeof classifySpend>, { kind: 'included' }> => c.kind === 'included')
+    .map((c) => c.row)
 
   // Group safe rows by category id (null → uncategorised).
   const rowsByCategory = new Map<string, SpendRow[]>()
   const uncategorizedRows: SpendRow[] = []
-  for (const item of safe) {
-    const row = toSpendRow(item)
-    if (item.budgetCategoryId == null) {
+  for (const included of safe) {
+    const row = toSpendRow(included)
+    if (included.budgetCategoryId == null) {
       uncategorizedRows.push(row)
     } else {
-      const list = rowsByCategory.get(item.budgetCategoryId)
+      const list = rowsByCategory.get(included.budgetCategoryId)
       if (list) list.push(row)
-      else rowsByCategory.set(item.budgetCategoryId, [row])
+      else rowsByCategory.set(included.budgetCategoryId, [row])
     }
   }
 

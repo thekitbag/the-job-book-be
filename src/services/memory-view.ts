@@ -6,8 +6,9 @@ import {
   strictParsePositive,
   formatUnitCostLabel,
   formatLineTotalLabel,
-  resolveSpendItemLabel,
 } from '../lib/cost-utils.js'
+import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
+import type { SpendClassifiable } from '../lib/spend-classification.js'
 
 const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
   ORDERED_MATERIAL: 'ordered_materials',
@@ -141,9 +142,6 @@ interface OrderedMaterialsCostSummary {
   excludedRows: ExcludedSpendRow[]
 }
 
-// itemLabel must be non-empty; resolveSpendItemLabel handles the trim/fallback rules.
-const resolveItemLabel = resolveSpendItemLabel
-
 type IncludedItem = {
   id: string
   materialName: string | null
@@ -225,77 +223,39 @@ function buildCostRows(items: IncludedItem[]): CostRow[] {
   return rows
 }
 
-function buildOrderedMaterialsCostSummary(
-  items: Array<{
-    id: string
-    materialName: string | null
-    quantity: string | null
-    unit: string | null
-    summary: string
-    costAmount: string | null
-    costCurrency: string | null
-    totalCostAmount: string | null
-    unresolvedFlags: string[]
-  }>,
-): OrderedMaterialsCostSummary {
-  type Item = (typeof items)[number]
-
+function buildOrderedMaterialsCostSummary(items: SpendClassifiable[]): OrderedMaterialsCostSummary {
   const gbpItems: IncludedItem[] = []
   const excludedRows: ExcludedSpendRow[] = []
 
-  // Classify each trusted bought/ordered item exactly once: it either contributes
-  // an included GBP line total, or it gets an excluded row with a reason.
-  const excludeRow = (m: Item, reason: SpendExclusionReason) => {
-    excludedRows.push({
-      memoryItemId: m.id,
-      itemLabel: resolveItemLabel(m.materialName, m.summary),
-      materialName: m.materialName,
-      quantity: m.quantity,
-      unit: m.unit,
-      reason,
-    })
-  }
-
+  // The include/exclude decision and reason come from the shared classifier
+  // (lib/spend-classification.ts) — the same rules budget-summary uses.
   for (const m of items) {
-    // no_cost_remembered: both costAmount and totalCostAmount absent, no other
-    // cost evidence (unresolved flags count as evidence worth checking).
-    if (m.unresolvedFlags.length === 0 && !m.totalCostAmount && !m.costAmount) {
-      excludeRow(m, 'no_cost_remembered')
-      continue
-    }
-    // Everything else excluded is cost_worth_checking: unresolved flags, an
-    // ambiguous basis (costAmount without a safe total), or missing currency.
-    if (m.unresolvedFlags.length > 0 || !m.totalCostAmount || !m.costCurrency) {
-      excludeRow(m, 'cost_worth_checking')
-      continue
-    }
-    // Trusted line total present. Only GBP contributes to the pilot aggregate;
-    // any other currency is excluded as worth checking.
-    if (m.costCurrency !== 'GBP') {
-      excludeRow(m, 'cost_worth_checking')
+    const classified = classifySpend(m)
+    if (classified.kind === 'non_spend') continue
+    if (classified.kind === 'excluded') {
+      const r = classified.row
+      excludedRows.push({
+        memoryItemId: r.memoryItemId,
+        itemLabel: r.itemLabel,
+        materialName: r.materialName,
+        quantity: r.quantity,
+        unit: r.unit,
+        reason: r.reason as SpendExclusionReason,
+      })
       continue
     }
     gbpItems.push({
-      id: m.id,
-      materialName: m.materialName,
-      quantity: m.quantity,
-      unit: m.unit,
-      totalCostAmount: m.totalCostAmount,
-      costCurrency: m.costCurrency,
+      id: classified.row.memoryItemId,
+      materialName: classified.row.materialName,
+      quantity: classified.row.quantity,
+      unit: classified.row.unit,
+      totalCostAmount: classified.row.lineTotalAmount,
+      costCurrency: classified.row.lineTotalCurrency,
     })
   }
 
-  let knownSpendAmount: string | null = null
-  let knownSpendLabel: string | null = null
-
-  if (gbpItems.length > 0) {
-    const total = gbpItems.reduce((sum, i) => {
-      const amt = strictParsePositive(i.totalCostAmount)
-      return sum + (amt ?? 0)
-    }, 0)
-    knownSpendAmount = String(Math.round(total * 100) / 100)
-    knownSpendLabel = `£${knownSpendAmount} known spend`
-  }
+  const knownSpendAmount = gbpItems.length > 0 ? sumKnownSpend(gbpItems.map((i) => i.totalCostAmount)) : null
+  const knownSpendLabel = knownSpendAmount !== null ? `£${knownSpendAmount} known spend` : null
 
   // Legacy ID arrays and counts are derived from the classified rows, not a
   // separate branch, so the two views can never disagree.
@@ -316,28 +276,20 @@ function buildOrderedMaterialsCostSummary(
 
 type LabourExclusionReason = 'no_rate_or_cost' | 'cost_worth_checking'
 
-interface LabourItem {
-  id: string
-  summary: string
-  materialName: string | null
-  labourHours: string | null
-  labourPerson: string | null
-  labourTask: string | null
-  costAmount: string | null
-  costCurrency: string | null
-  totalCostAmount: string | null
-  unresolvedFlags: string[]
-}
-
-function labourItemLabel(item: LabourItem): string {
-  return resolveSpendItemLabel(item.materialName ?? item.labourTask, item.summary)
-}
-
-// Classify each LABOUR memory item: a safe GBP monetary total contributes to known
-// cost; hours-only labour is remembered but excluded as `no_rate_or_cost`; anything
-// else excluded with cost left to check (mirrors the ordered-materials rules).
-function buildLabourCostSummary(items: LabourItem[]) {
-  const included: LabourItem[] = []
+// Classify each LABOUR memory item through the shared classifier: a safe GBP
+// monetary total contributes to known cost; hours-only labour is remembered but
+// excluded as `no_rate_or_cost`; anything else excluded with cost left to check.
+function buildLabourCostSummary(items: SpendClassifiable[]) {
+  const included: Array<{
+    memoryItemId: string
+    itemLabel: string
+    labourHours: string | null
+    labourPerson: string | null
+    labourTask: string | null
+    lineTotalAmount: string
+    lineTotalCurrency: string
+    lineTotalLabel: string
+  }> = []
   const excludedRows: Array<{
     memoryItemId: string
     itemLabel: string
@@ -347,53 +299,44 @@ function buildLabourCostSummary(items: LabourItem[]) {
     reason: LabourExclusionReason
   }> = []
 
-  const exclude = (item: LabourItem, reason: LabourExclusionReason) => {
-    excludedRows.push({
-      memoryItemId: item.id,
-      itemLabel: labourItemLabel(item),
-      labourHours: item.labourHours,
-      labourPerson: item.labourPerson,
-      labourTask: item.labourTask,
-      reason,
+  for (const m of items) {
+    const classified = classifySpend(m)
+    if (classified.kind === 'non_spend') continue
+    if (classified.kind === 'excluded') {
+      const r = classified.row
+      excludedRows.push({
+        memoryItemId: r.memoryItemId,
+        itemLabel: r.itemLabel,
+        labourHours: r.labourHours,
+        labourPerson: r.labourPerson,
+        labourTask: r.labourTask,
+        reason: r.reason as LabourExclusionReason,
+      })
+      continue
+    }
+    const r = classified.row
+    included.push({
+      memoryItemId: r.memoryItemId,
+      itemLabel: r.itemLabel,
+      labourHours: r.labourHours,
+      labourPerson: r.labourPerson,
+      labourTask: r.labourTask,
+      lineTotalAmount: r.lineTotalAmount,
+      lineTotalCurrency: r.lineTotalCurrency,
+      lineTotalLabel: r.lineTotalLabel,
     })
   }
 
-  for (const m of items) {
-    if (m.unresolvedFlags.length === 0 && !m.totalCostAmount && !m.costAmount) {
-      exclude(m, 'no_rate_or_cost')
-      continue
-    }
-    if (m.unresolvedFlags.length > 0 || !m.totalCostAmount || !m.costCurrency || m.costCurrency !== 'GBP') {
-      exclude(m, 'cost_worth_checking')
-      continue
-    }
-    included.push(m)
-  }
-
-  let knownSpendAmount: string | null = null
-  let knownSpendLabel: string | null = null
-  if (included.length > 0) {
-    const total = included.reduce((sum, i) => sum + (strictParsePositive(i.totalCostAmount) ?? 0), 0)
-    knownSpendAmount = String(Math.round(total * 100) / 100)
-    knownSpendLabel = `£${knownSpendAmount} known spend`
-  }
+  const knownSpendAmount = included.length > 0 ? sumKnownSpend(included.map((i) => i.lineTotalAmount)) : null
+  const knownSpendLabel = knownSpendAmount !== null ? `£${knownSpendAmount} known spend` : null
 
   return {
     knownSpendAmount,
     knownSpendCurrency: included.length > 0 ? 'GBP' : null,
     knownSpendLabel,
-    includedMemoryItemIds: included.map((i) => i.id),
+    includedMemoryItemIds: included.map((i) => i.memoryItemId),
     excludedRows,
-    rows: included.map((i) => ({
-      memoryItemId: i.id,
-      itemLabel: labourItemLabel(i),
-      labourHours: i.labourHours,
-      labourPerson: i.labourPerson,
-      labourTask: i.labourTask,
-      lineTotalAmount: i.totalCostAmount as string,
-      lineTotalCurrency: 'GBP',
-      lineTotalLabel: formatLineTotalLabel(i.totalCostAmount, 'GBP') ?? `£${i.totalCostAmount} total`,
-    })),
+    rows: included,
   }
 }
 
@@ -543,7 +486,7 @@ export async function getMemoryView(jobId: string, userId: string) {
   })
 
   const orderedMaterials = buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? [])
-  const labour = buildLabourCostSummary((bySection.get('labour') ?? []) as unknown as LabourItem[])
+  const labour = buildLabourCostSummary(bySection.get('labour') ?? [])
   const costSummary = {
     orderedMaterials,
     labour,
