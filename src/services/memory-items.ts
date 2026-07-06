@@ -9,9 +9,7 @@ import {
   formatLineTotalLabel,
 } from '../lib/cost-utils.js'
 import { assertAssignableCategory } from './budget.js'
-
-// Memory types for which a budget category is meaningful in this slice.
-const CATEGORY_ELIGIBLE_TYPES = new Set(['ORDERED_MATERIAL', 'LABOUR'])
+import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -74,7 +72,7 @@ export async function patchMemoryItem(
     if (patch.budgetCategoryId === null) {
       budgetCategoryId = null
     } else {
-      if (!CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
+      if (!isCategoryAssignableMemoryType(finalMemoryType)) {
         throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
       }
       await assertAssignableCategory(jobId, patch.budgetCategoryId)
@@ -84,7 +82,7 @@ export async function patchMemoryItem(
 
   // If the memory type is (or becomes) category-ineligible, a preserved category
   // is cleared so trusted memory never carries a category on the wrong type.
-  if (budgetCategoryId !== null && !CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
+  if (budgetCategoryId !== null && !isCategoryAssignableMemoryType(finalMemoryType)) {
     budgetCategoryId = null
   }
 
@@ -293,19 +291,6 @@ export interface CreateMemoryItemInput {
   budgetCategoryId?: string | null
 }
 
-// Map a lowercase API memory type to its memory-view section key, for the
-// ADD_MISSING ReviewDecision audit record.
-const MEMORY_TYPE_SECTION_KEY: Record<string, string> = {
-  ordered_material: 'ordered_materials',
-  used_material: 'used_materials',
-  leftover_material: 'leftovers',
-  supplier_delivery_note: 'supplier_delivery_notes',
-  customer_change: 'customer_changes',
-  watch_out: 'watch_outs',
-  labour: 'labour',
-  general_note: 'general_notes',
-}
-
 // Ensure every manual item has a non-empty summary: prefer the submitted text,
 // otherwise derive a plain-language one from the section fields.
 function deriveManualSummary(input: CreateMemoryItemInput): string | null {
@@ -375,7 +360,7 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   // Category is only meaningful for spend and labour.
   let budgetCategoryId: string | null = null
   if (input.budgetCategoryId != null) {
-    if (!CATEGORY_ELIGIBLE_TYPES.has(memoryType)) {
+    if (!isCategoryAssignableMemoryType(memoryType)) {
       throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
     }
     await assertAssignableCategory(jobId, input.budgetCategoryId)
@@ -390,7 +375,8 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
         decidedBy: userId,
         action: 'ADD_MISSING',
         candidateFactId: null,
-        sectionKey: MEMORY_TYPE_SECTION_KEY[input.memoryType] ?? null,
+        // Section key for the ADD_MISSING ReviewDecision audit record.
+        sectionKey: sectionKeyForApiMemoryType(input.memoryType),
         sourceCandidateFactIds: [],
       },
     })

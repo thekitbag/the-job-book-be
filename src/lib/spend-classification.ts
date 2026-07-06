@@ -14,8 +14,7 @@
 //                   → 'cost_worth_checking'
 //   non-spend   — every other memory type never contributes
 import { strictParsePositive, formatLineTotalLabel, resolveSpendItemLabel } from './cost-utils.js'
-
-export const SPEND_MEMORY_TYPES = new Set(['ORDERED_MATERIAL', 'LABOUR'])
+import { isSpendMemoryType } from './memory-types.js'
 
 export type SpendExclusionReason = 'no_cost_remembered' | 'no_rate_or_cost' | 'cost_worth_checking'
 
@@ -83,7 +82,7 @@ function itemFacts(item: SpendClassifiable): SpendItemFacts {
 }
 
 export function classifySpend(item: SpendClassifiable): SpendClassification {
-  if (!SPEND_MEMORY_TYPES.has(item.memoryType)) return { kind: 'non_spend' }
+  if (!isSpendMemoryType(item.memoryType)) return { kind: 'non_spend' }
 
   // No cost evidence at all (unresolved flags count as evidence worth checking).
   if (item.unresolvedFlags.length === 0 && !item.totalCostAmount && !item.costAmount) {

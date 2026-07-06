@@ -9,17 +9,13 @@ import {
 } from '../lib/cost-utils.js'
 import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { SpendClassifiable } from '../lib/spend-classification.js'
+import { MEMORY_TYPES } from '../lib/memory-types.js'
 
-const MEMORY_TYPE_TO_SECTION: Record<string, string> = {
-  ORDERED_MATERIAL: 'ordered_materials',
-  USED_MATERIAL: 'used_materials',
-  LEFTOVER_MATERIAL: 'leftovers',
-  SUPPLIER_DELIVERY_NOTE: 'supplier_delivery_notes',
-  CUSTOMER_CHANGE: 'customer_changes',
-  WATCH_OUT: 'watch_outs',
-  LABOUR: 'labour',
-  GENERAL_NOTE: 'general_notes',
-}
+// Trusted-memory sections come from the shared registry; UNCLEAR is excluded
+// because it is never a trusted memory type and has no memory-view section.
+const MEMORY_TYPE_TO_SECTION: Record<string, string> = Object.fromEntries(
+  MEMORY_TYPES.filter((t) => t.storedType !== 'UNCLEAR').map((t) => [t.storedType, t.sectionKey]),
+)
 
 // Build a display cost label from stored cost fields (GBP only for now; ISO code fallback)
 function formatCostLabel(

@@ -3,6 +3,7 @@ import { ErrorCode } from '../types/errors.js'
 import { STRICT_DECIMAL_RE } from '../lib/cost-utils.js'
 import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { IncludedSpendRow } from '../lib/spend-classification.js'
+import { isCategoryAssignableApiMemoryType } from '../lib/memory-types.js'
 
 // ── Ownership ─────────────────────────────────────────────────────────────────
 
@@ -346,7 +347,7 @@ export function suggestBudgetCategory(
 ): BudgetCategorySuggestion | null {
   const { memoryType } = input
   if (categories.length === 0) return null
-  if (memoryType !== 'ordered_material' && memoryType !== 'labour') return null
+  if (!isCategoryAssignableApiMemoryType(memoryType)) return null
 
   if (memoryType === 'labour') {
     // A category literally named "labour" is the strong default for labour facts.
