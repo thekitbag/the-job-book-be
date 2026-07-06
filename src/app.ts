@@ -12,6 +12,8 @@ import { createTranscriptionProvider } from './transcription/index.js'
 import type { TranscriptionProvider } from './transcription/index.js'
 import { createExtractionProvider } from './extraction/index.js'
 import type { ExtractionProvider } from './extraction/index.js'
+import { createEmailProvider } from './email/index.js'
+import type { EmailProvider } from './email/index.js'
 import factsRoutes from './routes/facts.js'
 import reviewRoutes from './routes/review.js'
 import reviewQueueRoutes from './routes/review-queue.js'
@@ -25,6 +27,7 @@ export interface AppOptions {
   storage?: AudioStorageProvider
   transcription?: TranscriptionProvider
   extraction?: ExtractionProvider
+  email?: EmailProvider
   maxAudioBytes?: number
 }
 
@@ -38,6 +41,7 @@ export function buildApp(opts: AppOptions = {}) {
   const storage = opts.storage ?? createStorageProvider()
   const transcription = opts.transcription ?? createTranscriptionProvider()
   const extraction = opts.extraction ?? createExtractionProvider()
+  const email = opts.email ?? createEmailProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
 
   fastify.register(cors, {
@@ -62,7 +66,7 @@ export function buildApp(opts: AppOptions = {}) {
   })
 
   // Auth routes bypass the auth plugin (login/logout handle their own flow)
-  fastify.register(authRoutes)
+  fastify.register(authRoutes, { email })
 
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)

@@ -1,11 +1,6 @@
 const DEV_SESSION_SECRET = 'dev-secret-change-in-production'
 const MIN_SESSION_SECRET_LEN = 32
-const MIN_PASSCODE_LEN = 12
 const MIN_INSPECTION_KEY_LEN = 24
-
-const WEAK_PASSCODES = new Set([
-  'change-me', 'changeme', 'password', 'admin', 'test', 'passcode', 'pilot', '123456',
-])
 
 // ── Session secret helper ─────────────────────────────────────────────────────
 
@@ -39,20 +34,10 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv): void {
     errors.push(`SESSION_COOKIE_SECRET: must be at least ${MIN_SESSION_SECRET_LEN} characters`)
   }
 
-  // PILOT_PASSCODE
-  const passcode = env.PILOT_PASSCODE
-  if (!passcode) {
-    errors.push('PILOT_PASSCODE: missing')
-  } else if (WEAK_PASSCODES.has(passcode.toLowerCase())) {
-    errors.push('PILOT_PASSCODE: must not be a default or weak value')
-  } else if (passcode.length < MIN_PASSCODE_LEN) {
-    errors.push(`PILOT_PASSCODE: must be at least ${MIN_PASSCODE_LEN} characters`)
-  } else if (secret && passcode === secret) {
-    errors.push('PILOT_PASSCODE: must not equal SESSION_COOKIE_SECRET')
+  // Legacy pilot auth must be fully retired in production: account auth only.
+  if (env.PILOT_PASSCODE) {
+    errors.push('PILOT_PASSCODE: must not be set in production (passcode auth has been removed)')
   }
-
-  // PILOT_USER_ID
-  if (!env.PILOT_USER_ID) errors.push('PILOT_USER_ID: missing')
 
   // INTERNAL_INSPECTION_KEY
   const inspectionKey = env.INTERNAL_INSPECTION_KEY
@@ -60,8 +45,28 @@ export function validateProductionConfig(env: NodeJS.ProcessEnv): void {
     errors.push('INTERNAL_INSPECTION_KEY: missing')
   } else if (inspectionKey.length < MIN_INSPECTION_KEY_LEN) {
     errors.push(`INTERNAL_INSPECTION_KEY: must be at least ${MIN_INSPECTION_KEY_LEN} characters`)
-  } else if (passcode && inspectionKey === passcode) {
-    errors.push('INTERNAL_INSPECTION_KEY: must not equal PILOT_PASSCODE')
+  } else if (secret && inspectionKey === secret) {
+    errors.push('INTERNAL_INSPECTION_KEY: must not equal SESSION_COOKIE_SECRET')
+  }
+
+  // Password-reset email (required for account auth in production)
+  if (env.EMAIL_PROVIDER !== 'resend') {
+    errors.push('EMAIL_PROVIDER: must be resend in production (dev email provider is not allowed)')
+  } else {
+    if (!env.RESEND_API_KEY) errors.push('RESEND_API_KEY: missing (required when EMAIL_PROVIDER=resend)')
+    if (!env.EMAIL_FROM) errors.push('EMAIL_FROM: missing (required when EMAIL_PROVIDER=resend)')
+  }
+
+  const resetUrlBase = env.PASSWORD_RESET_URL_BASE
+  if (!resetUrlBase) {
+    errors.push('PASSWORD_RESET_URL_BASE: missing')
+  } else {
+    try {
+      const u = new URL(resetUrlBase)
+      if (u.protocol !== 'https:') errors.push('PASSWORD_RESET_URL_BASE: must use HTTPS')
+    } catch {
+      errors.push('PASSWORD_RESET_URL_BASE: must be a valid URL')
+    }
   }
 
   // FRONTEND_ORIGIN

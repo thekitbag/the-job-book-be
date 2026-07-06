@@ -10,6 +10,21 @@ jobs:
     name: Build, test, audit
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,17 +40,20 @@ jobs:
       - name: Generate Prisma client
         run: npm run db:generate
         env:
-          # prisma generate reads the schema only — no live DB needed.
-          # Dummy value satisfies the env() reference in schema.prisma.
           DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
 
       - name: Type check and build
         run: npm run build
 
+      - name: Apply database migrations
+        run: npm run db:migrate:deploy
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
       - name: Run tests
         run: npm test
         env:
-          # Tests mock Prisma entirely — no live DB or real providers needed.
+          # Most suites mock Prisma; auth/isolation/migration suites use this real DB.
           DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
           # TRANSCRIPTION_PROVIDER and EXTRACTION_PROVIDER default to fake.
           # OPENAI_API_KEY is intentionally absent.
