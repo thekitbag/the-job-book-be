@@ -1,6 +1,6 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
-import { buildFreshQueueSections } from './review-queue.js'
+import { deriveFreshQueueSections } from './review-queue.js'
 
 // ── Status normalisers ────────────────────────────────────────────────────────
 
@@ -98,9 +98,9 @@ export async function getJobInspection(
     }),
   ])
 
-  // Generate a fresh queue from current unresolved facts (same generation path
-  // as the review-queue route — ensures inspection always reflects current state).
-  const { sections: queueSections } = await buildFreshQueueSections(jobId, new Date())
+  // Derive a fresh queue from current unresolved facts (same read-only derivation
+  // as the review-queue route — inspection reads never write queue_items).
+  const { sections: queueSections } = await deriveFreshQueueSections(jobId, new Date())
 
   // Build fact → decision IDs map (via candidateFactId and sourceCandidateFactIds)
   const decisionsByFactId = new Map<string, string[]>()

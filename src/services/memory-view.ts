@@ -1,6 +1,6 @@
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
-import { buildFreshQueueSections } from './review-queue.js'
+import { deriveFreshQueueSections } from './review-queue.js'
 import {
   STRICT_DECIMAL_RE as COST_DECIMAL_RE,
   strictParsePositive,
@@ -399,7 +399,7 @@ export async function getMemoryView(jobId: string, userId: string) {
       },
       orderBy: { createdAt: 'desc' },
     }),
-    buildFreshQueueSections(jobId, new Date()),
+    deriveFreshQueueSections(jobId, new Date()),
   ])
 
   // Group memory items by section key derived from memoryType

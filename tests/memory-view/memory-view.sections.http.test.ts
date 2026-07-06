@@ -5,9 +5,10 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import type { FastifyInstance } from 'fastify'
 import { buildTestApp } from '../helpers/test-app.js'
 import {
-  JOB_ID, NOTE_ID, TRANSCRIPT_ID, FACT_ID, QUEUE_ITEM_ID, MEMORY_VIEW_URL, AUTH_HEADERS,
+  JOB_ID, NOTE_ID, TRANSCRIPT_ID, FACT_ID, MEMORY_VIEW_URL, AUTH_HEADERS,
   resetMemoryViewMocks, makeSourceFact, makeMemoryItem, makeQueueItem, makeQueueFact,
 } from '../helpers/memory-view-test-builders.js'
+import { computeQueueItemId } from '../../src/services/review-queue.js'
 
 vi.mock('../../src/db/client.js', async () => {
   const { createMemoryViewPrismaMock } = await import('../helpers/memory-view-test-builders.js')
@@ -162,9 +163,23 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
     const totalTrusted = body.sections.reduce((sum, s) => sum + s.items.length, 0)
     expect(totalTrusted).toBe(0)
     expect(body.stillToCheck.count).toBe(1)
-    expect(body.stillToCheck.items[0].id).toBe(QUEUE_ITEM_ID)
+    // still-to-check items are derived read-only from unresolved facts, with
+    // the same deterministic id a review-queue GET would return
+    expect(body.stillToCheck.items[0].id).toBe(computeQueueItemId(JOB_ID, [FACT_ID]))
     expect(body.stillToCheck.items[0].sectionKey).toBe('ordered_materials')
     expect(body.stillToCheck.items[0].kind).toBe('single')
+  })
+
+  it('GET memory-view performs no queue_items writes (read-only invariant)', async () => {
+    vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeQueueFact({ status: 'DRAFT' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
+
+    expect(res.statusCode).toBe(200)
+    expect(prisma.queueItem.deleteMany).not.toHaveBeenCalled()
+    expect(prisma.queueItem.createMany).not.toHaveBeenCalled()
   })
 
   it('stillToCheck count is 0 when no unresolved work exists', async () => {

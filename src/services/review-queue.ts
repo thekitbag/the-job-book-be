@@ -335,9 +335,18 @@ async function verifyJobOwnership(jobId: string, userId: string) {
   return job
 }
 
-// ── Shared queue generation (used by both the review-queue route and inspection) ──
+// ── Queue derivation (read-only) and materialisation (write path) ─────────────
+//
+// Derivation reads unresolved candidate facts and computes the queue —
+// deterministic ids included — without ever touching queue_items. Every read
+// path (review-queue GET, memory-view, inspection) uses it, so reads are
+// read-only. Materialisation persists the derived rows and is called only from
+// the decision write path, where the audit trail needs a queue_items row.
 
-export async function buildFreshQueueSections(jobId: string, now: Date) {
+// Exported for tests that need to predict derived queue item ids.
+export const computeQueueItemId = computeGroupId
+
+export async function deriveFreshQueueSections(jobId: string, now: Date) {
   const facts = await prisma.candidateFact.findMany({
     where: { jobId, status: { in: ['DRAFT', 'UNCLEAR'] } },
     include: {
@@ -350,8 +359,9 @@ export async function buildFreshQueueSections(jobId: string, now: Date) {
   const factMap = new Map(facts.map((f) => [f.id, f]))
   const grouped = groupAllFacts(facts)
 
-  // Assign deterministic IDs so the same grouping always yields the same UUID.
-  const itemsWithIds = grouped.map((item) => ({
+  // Assign deterministic IDs so the same grouping always yields the same UUID
+  // and an id returned by a GET stays valid for a later decision POST.
+  const items = grouped.map((item) => ({
     id: computeGroupId(jobId, item.sourceCandidateFactIds),
     jobId,
     sectionKey: item.sectionKey,
@@ -365,30 +375,11 @@ export async function buildFreshQueueSections(jobId: string, now: Date) {
     uncertaintyFlags: item.uncertaintyFlags,
     sourceCandidateFactIds: item.sourceCandidateFactIds,
   }))
-  const currentIds = itemsWithIds.map((i) => i.id)
-
-  // Remove DRAFT items whose source facts are no longer unresolved.
-  // Never touch decided (confirmed/corrected/dismissed) items — they are the audit trail.
-  await prisma.queueItem.deleteMany({
-    where: currentIds.length > 0
-      ? { jobId, status: 'draft', id: { notIn: currentIds } }
-      : { jobId, status: 'draft' },
-  })
-
-  // Create items that don't exist yet; skip if the stable ID already exists.
-  if (itemsWithIds.length > 0) {
-    await prisma.queueItem.createMany({ data: itemsWithIds, skipDuplicates: true })
-  }
-
-  const queueItems = await prisma.queueItem.findMany({
-    where: { jobId, status: 'draft' },
-    orderBy: { createdAt: 'asc' },
-  })
 
   const sections = SECTION_KEYS.map((key) => ({
     key,
     label: SECTION_LABELS[key],
-    items: queueItems
+    items: items
       .filter((item) => item.sectionKey === key)
       .map((item) => ({
         id: item.id,
@@ -404,7 +395,26 @@ export async function buildFreshQueueSections(jobId: string, now: Date) {
       })),
   }))
 
-  return { sections, factMap }
+  return { sections, factMap, items }
+}
+
+// Persist the derived queue for a job: create missing rows (stable ids make
+// this idempotent) and delete stale DRAFT rows whose source facts are no longer
+// unresolved. Never touches decided rows — they are the audit trail. Called
+// from the decision write path only, so read endpoints stay read-only.
+export async function syncReviewQueueForJob(jobId: string, now: Date) {
+  const { items } = await deriveFreshQueueSections(jobId, now)
+  const currentIds = items.map((i) => i.id)
+
+  await prisma.queueItem.deleteMany({
+    where: currentIds.length > 0
+      ? { jobId, status: 'draft', id: { notIn: currentIds } }
+      : { jobId, status: 'draft' },
+  })
+
+  if (items.length > 0) {
+    await prisma.queueItem.createMany({ data: items, skipDuplicates: true })
+  }
 }
 
 // ── GET /api/jobs/:jobId/review-queue ─────────────────────────────────────────
@@ -414,7 +424,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
   const now = new Date()
 
-  const { sections: baseSections, factMap } = await buildFreshQueueSections(jobId, now)
+  const { sections: baseSections, factMap } = await deriveFreshQueueSections(jobId, now)
 
   // Active categories drive review-time suggestions, recomputed on every GET so a
   // queue item created before categories changed still reflects current categories.
@@ -489,6 +499,11 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
 export async function submitQueueDecision(jobId: string, userId: string, payload: QueueDecisionPayload) {
   await verifyJobOwnership(jobId, userId)
+
+  // Reads no longer persist queue items, so materialise the derived queue now:
+  // a deterministic id returned by a prior GET must exist as a queue_items row
+  // before the decision can be recorded against it.
+  await syncReviewQueueForJob(jobId, new Date())
 
   const item = await prisma.queueItem.findFirst({
     where: { id: payload.queueItemId, jobId },

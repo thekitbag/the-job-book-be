@@ -86,17 +86,10 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
 
   it('groups two same-name same-quantity facts as duplicate_group', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact(), makeFact2()])
-    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
-      makeQueueItem({ kind: 'DUPLICATE_GROUP', reviewLabel: 'Looks like the same item', sourceCandidateFactIds: [FACT_ID, FACT_ID_2] }),
-    ])
 
     const res = await getQueue()
 
     expect(res.statusCode).toBe(200)
-    // Verify the grouping service passed a DUPLICATE_GROUP item to createMany
-    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
-    expect(callData.some((d: any) => d.kind === 'DUPLICATE_GROUP')).toBe(true)
-
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
     expect(item.kind).toBe('duplicate_group')
     expect(item.reviewLabel).toBe('Looks like the same item')
@@ -108,14 +101,8 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       makeFact({ quantity: '6' }),
       makeFact2({ quantity: '12' }),
     ])
-    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
-      makeQueueItem({ kind: 'CONTRADICTION', reviewLabel: 'Worth checking' }),
-    ])
 
     const res = await getQueue()
-
-    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
-    expect(callData.some((d: any) => d.kind === 'CONTRADICTION')).toBe(true)
 
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
     expect(item.kind).toBe('contradiction')
@@ -126,17 +113,12 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
       makeFact({ factType: 'UNCLEAR', materialName: null, quantity: null }),
     ])
-    vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
-      makeQueueItem({ sectionKey: 'unclear_items', kind: 'UNCLEAR_PROMPT', reviewLabel: 'Needs clarification' }),
-    ])
 
     const res = await getQueue()
 
-    const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
-    expect(callData.some((d: any) => d.kind === 'UNCLEAR_PROMPT')).toBe(true)
-
     const unclearSection = res.json().sections.find((s: any) => s.key === 'unclear_items')
     expect(unclearSection.items[0].kind).toBe('unclear_prompt')
+    expect(unclearSection.items[0].reviewLabel).toBe('Needs clarification')
   })
 
   it('assigns Today/Yesterday/Earlier time labels from capturedAt', async () => {
@@ -145,15 +127,8 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
       vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
         makeFact({ sourceNote: { id: NOTE_ID, capturedAt: TODAY_CAPTURE } }),
       ])
-      vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([
-        makeQueueItem({ timeLabel: 'Today' }),
-      ])
 
       const res = await getQueue()
-
-      // Verify the service computed timeLabel='Today' when passing to createMany
-      const callData = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data ?? []
-      expect(callData[0]?.timeLabel).toBe('Today')
 
       const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
       expect(item.timeLabel).toBe('Today')
@@ -162,16 +137,15 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     }
   })
 
-  it('deleteMany targets only stale DRAFT items, not decided items', async () => {
+  it('GET performs no queue_items writes (read-only invariant)', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
 
-    await getQueue()
+    const res = await getQueue()
 
-    const deleteCall = vi.mocked(prisma.queueItem.deleteMany as any).mock.calls[0]?.[0]
-    expect(deleteCall.where.jobId).toBe(JOB_ID)
-    expect(deleteCall.where.status).toBe('draft')
-    // notIn constraint means decided (non-draft) items are never touched
-    expect(deleteCall.where.id).toHaveProperty('notIn')
+    expect(res.statusCode).toBe(200)
+    expect(prisma.queueItem.deleteMany).not.toHaveBeenCalled()
+    expect(prisma.queueItem.createMany).not.toHaveBeenCalled()
+    expect(prisma.queueItem.update).not.toHaveBeenCalled()
   })
 
   it('includes alreadyRemembered memory items', async () => {
@@ -247,16 +221,16 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(item.lineTotalLabel).toBe('£40 total')
   })
 
-  it('item ID is stable: createMany receives the same deterministic ID on consecutive GETs', async () => {
+  it('item ID is stable: consecutive GETs derive the same deterministic ID', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
 
     // First GET
-    await getQueue()
-    const firstId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data?.[0]?.id
+    const first = await getQueue()
+    const firstId = first.json().sections.find((s: any) => s.key === 'used_materials').items[0]?.id
 
     // Second GET (simulating a concurrent refresh or page reload)
-    await getQueue()
-    const secondId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[1]?.[0]?.data?.[0]?.id
+    const second = await getQueue()
+    const secondId = second.json().sections.find((s: any) => s.key === 'used_materials').items[0]?.id
 
     expect(firstId).toBeDefined()
     expect(firstId).toBe(secondId)
@@ -265,9 +239,9 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
   it('decision submitted with ID from first GET succeeds after a second GET runs', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
 
-    // First GET — capture the stable ID the service would pass to createMany
-    await getQueue()
-    const stableId = vi.mocked(prisma.queueItem.createMany as any).mock.calls[0]?.[0]?.data?.[0]?.id
+    // First GET — capture the stable derived ID from the response
+    const first = await getQueue()
+    const stableId = first.json().sections.find((s: any) => s.key === 'used_materials').items[0]?.id
     expect(stableId).toBeDefined()
 
     // Second GET happens on another device before Mike submits his decision

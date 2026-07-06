@@ -8,16 +8,15 @@ import {
   getBudgetSummary,
 } from '../services/budget.js'
 
-const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
+import {
+  validateNonEmptyBoundedString,
+  validateOptionalNonNegativeDecimal,
+  validateOptionalGbpCurrency,
+  validateOptionalNonNegativeInteger,
+  validateOptionalBoolean,
+} from '../lib/request-validation.js'
+
 const NAME_MAX_LENGTH = 60
-
-function isNonNegativeDecimal(v: unknown): v is string {
-  return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
-}
-
-function isInteger(v: unknown): v is number {
-  return typeof v === 'number' && Number.isInteger(v)
-}
 
 interface CategoryBody {
   name?: unknown
@@ -27,31 +26,19 @@ interface CategoryBody {
   isArchived?: unknown
 }
 
-// Shared field-shape validation. Returns an error message, or null when valid.
+// Shared field-shape validation. Returns an error, or null when valid.
 // `requireName` is true for POST (name mandatory) and false for PATCH.
 function validateCategoryBody(body: CategoryBody, requireName: boolean): { code: string; message: string } | null {
-  const invalid = (message: string) => ({ code: ErrorCode.INVALID_FIELD, message })
-
-  if (requireName || 'name' in body) {
-    if (body.name === undefined && requireName) return { code: ErrorCode.MISSING_FIELD, message: 'name is required' }
-    if (body.name !== undefined) {
-      if (typeof body.name !== 'string' || body.name.trim().length === 0) return invalid('name must be a non-empty string')
-      if (body.name.trim().length > NAME_MAX_LENGTH) return invalid(`name must be at most ${NAME_MAX_LENGTH} characters`)
-    }
+  if (requireName && body.name === undefined) {
+    return { code: ErrorCode.MISSING_FIELD, message: 'name is required' }
   }
-  if (body.budgetAmount !== undefined && body.budgetAmount !== null && !isNonNegativeDecimal(body.budgetAmount)) {
-    return invalid('budgetAmount must be a non-negative decimal string')
-  }
-  if (body.budgetCurrency !== undefined && body.budgetCurrency !== null && body.budgetCurrency !== 'GBP') {
-    return invalid('budgetCurrency must be GBP')
-  }
-  if (body.sortOrder !== undefined && body.sortOrder !== null && (!isInteger(body.sortOrder) || body.sortOrder < 0)) {
-    return invalid('sortOrder must be a non-negative integer')
-  }
-  if (body.isArchived !== undefined && typeof body.isArchived !== 'boolean') {
-    return invalid('isArchived must be a boolean')
-  }
-  return null
+  return (
+    (body.name !== undefined ? validateNonEmptyBoundedString(body.name, 'name', NAME_MAX_LENGTH) : null) ??
+    validateOptionalNonNegativeDecimal(body.budgetAmount, 'budgetAmount') ??
+    validateOptionalGbpCurrency(body.budgetCurrency, 'budgetCurrency') ??
+    validateOptionalNonNegativeInteger(body.sortOrder, 'sortOrder') ??
+    validateOptionalBoolean(body.isArchived, 'isArchived')
+  )
 }
 
 const budgetRoutes: FastifyPluginAsync = async (fastify) => {

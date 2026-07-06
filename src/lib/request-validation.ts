@@ -84,3 +84,60 @@ export function validateBudgetCategoryRef(
   if (value === null || typeof value === 'string') return null
   return invalid(`${fieldName} must be a string or null`)
 }
+
+// A present required-or-provided name-like field: non-empty after trim, with a
+// maximum trimmed length. Requiredness (MISSING_FIELD) stays in the routes.
+export function validateNonEmptyBoundedString(
+  value: unknown,
+  fieldName: string,
+  maxLength: number,
+): ValidationError | null {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return invalid(`${fieldName} must be a non-empty string`)
+  }
+  if (value.trim().length > maxLength) {
+    return invalid(`${fieldName} must be at most ${maxLength} characters`)
+  }
+  return null
+}
+
+// Optional non-negative decimal string (allows 0; same decimal shape rule).
+export function validateOptionalNonNegativeDecimal(
+  value: unknown,
+  fieldName: string,
+): ValidationError | null {
+  if (value == null) return null
+  if (!isValidDecimalString(value)) {
+    return invalid(`${fieldName} must be a non-negative decimal string`)
+  }
+  return null
+}
+
+// Optional currency field: GBP is the only supported currency in this pilot.
+export function validateOptionalGbpCurrency(
+  value: unknown,
+  fieldName: string,
+): ValidationError | null {
+  if (value == null) return null
+  if (value !== 'GBP') return invalid(`${fieldName} must be GBP`)
+  return null
+}
+
+// Optional non-negative integer field.
+export function validateOptionalNonNegativeInteger(
+  value: unknown,
+  fieldName: string,
+): ValidationError | null {
+  if (value == null) return null
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return invalid(`${fieldName} must be a non-negative integer`)
+  }
+  return null
+}
+
+// Boolean field shape: undefined means omitted; null and non-booleans fail.
+export function validateOptionalBoolean(value: unknown, fieldName: string): ValidationError | null {
+  if (value === undefined) return null
+  if (typeof value !== 'boolean') return invalid(`${fieldName} must be a boolean`)
+  return null
+}
