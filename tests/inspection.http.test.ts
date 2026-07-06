@@ -374,7 +374,14 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
 
   it('includes current draft queue items grouped by section', async () => {
     const { prisma } = await import('../src/db/client.js')
-    vi.mocked(prisma.queueItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeQueueItem()])
+    // Queue sections derive read-only from unresolved candidate facts.
+    vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        ...makeFact({ status: 'DRAFT', id: FACT_ID }),
+        sourceNote: { id: NOTE_ID, capturedAt: new Date('2026-06-11T09:15:00.000Z') },
+        transcript: { id: TRANSCRIPT_ID, text: 'Ordered plasterboard' },
+      },
+    ])
 
     const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
     const body = res.json<{ queue: { sections: Array<{ key: string; label: string; items: unknown[] }> } }>()
@@ -436,7 +443,7 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
   it('generates fresh queue from candidate facts even when queueItem table is empty/stale', async () => {
     const { prisma } = await import('../src/db/client.js')
     // Unresolved fact exists, but no persisted queue items (simulates stale/never-refreshed state).
-    // buildFreshQueueSections includes sourceNote + transcript on each fact (groupTimeLabel needs capturedAt).
+    // deriveFreshQueueSections includes sourceNote + transcript on each fact (groupTimeLabel needs capturedAt).
     vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
         ...makeFact({ status: 'DRAFT', id: FACT_ID }),
@@ -444,13 +451,13 @@ describe('GET /api/internal/pilot/jobs/:jobId/inspection — response shape', ()
         transcript: { id: TRANSCRIPT_ID, text: 'Ordered plasterboard' },
       },
     ])
-    vi.mocked(prisma.queueItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeQueueItem()])
 
     const res = await app.inject({ method: 'GET', url: INSPECTION_URL, headers })
 
     expect(res.statusCode).toBe(200)
-    // Verify createMany was called — fresh items were generated, not just read from DB
-    expect(vi.mocked(prisma.queueItem.createMany as ReturnType<typeof vi.fn>)).toHaveBeenCalled()
+    // Inspection is a read: the queue is derived, never persisted, by this path
+    expect(vi.mocked(prisma.queueItem.createMany as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
+    expect(vi.mocked(prisma.queueItem.deleteMany as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
     const body = res.json<{ queue: { sections: Array<{ key: string; items: unknown[] }> } }>()
     const ordered = body.queue.sections.find((s) => s.key === 'ordered_materials')
     expect(ordered?.items).toHaveLength(1)

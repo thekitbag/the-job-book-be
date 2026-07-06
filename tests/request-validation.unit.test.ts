@@ -7,6 +7,11 @@ import {
   validateOptionalUncertaintyResolution,
   validateMemoryTargetType,
   validateBudgetCategoryRef,
+  validateNonEmptyBoundedString,
+  validateOptionalNonNegativeDecimal,
+  validateOptionalGbpCurrency,
+  validateOptionalNonNegativeInteger,
+  validateOptionalBoolean,
   VALID_COST_QUALIFIERS,
   VALID_UNCERTAINTY_RESOLUTIONS,
 } from '../src/lib/request-validation.js'
@@ -112,6 +117,90 @@ describe('validateMemoryTargetType', () => {
     expect(validateMemoryTargetType('unclear', 'corrected.memoryType')?.message).toBe(
       'corrected.memoryType must be a valid non-unclear memory type',
     )
+  })
+})
+
+describe('validateNonEmptyBoundedString', () => {
+  it('accepts a non-empty string within the limit', () => {
+    expect(validateNonEmptyBoundedString('timber', 'name', 60)).toBeNull()
+    expect(validateNonEmptyBoundedString('  padded  ', 'name', 60)).toBeNull()
+  })
+
+  it.each([[''], ['   '], [7], [null]])('rejects %o as non-empty string', (v) => {
+    expect(validateNonEmptyBoundedString(v, 'name', 60)).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'name must be a non-empty string',
+    })
+  })
+
+  it('rejects strings over the max trimmed length with the exact message', () => {
+    expect(validateNonEmptyBoundedString('x'.repeat(61), 'name', 60)).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'name must be at most 60 characters',
+    })
+    expect(validateNonEmptyBoundedString(`  ${'x'.repeat(60)}  `, 'name', 60)).toBeNull()
+  })
+})
+
+describe('validateOptionalNonNegativeDecimal', () => {
+  it('accepts decimals including zero, and null/undefined', () => {
+    expect(validateOptionalNonNegativeDecimal('0', 'budgetAmount')).toBeNull()
+    expect(validateOptionalNonNegativeDecimal('4000', 'budgetAmount')).toBeNull()
+    expect(validateOptionalNonNegativeDecimal(null, 'budgetAmount')).toBeNull()
+    expect(validateOptionalNonNegativeDecimal(undefined, 'budgetAmount')).toBeNull()
+  })
+
+  it.each([['-5'], ['£40'], ['abc'], [40]])('rejects %o with the exact message', (v) => {
+    expect(validateOptionalNonNegativeDecimal(v, 'budgetAmount')).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'budgetAmount must be a non-negative decimal string',
+    })
+  })
+})
+
+describe('validateOptionalGbpCurrency', () => {
+  it('accepts GBP and null/undefined', () => {
+    expect(validateOptionalGbpCurrency('GBP', 'budgetCurrency')).toBeNull()
+    expect(validateOptionalGbpCurrency(null, 'budgetCurrency')).toBeNull()
+    expect(validateOptionalGbpCurrency(undefined, 'budgetCurrency')).toBeNull()
+  })
+
+  it.each([['EUR'], ['gbp'], [7]])('rejects %o with the exact message', (v) => {
+    expect(validateOptionalGbpCurrency(v, 'budgetCurrency')).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'budgetCurrency must be GBP',
+    })
+  })
+})
+
+describe('validateOptionalNonNegativeInteger', () => {
+  it('accepts non-negative integers and null/undefined', () => {
+    expect(validateOptionalNonNegativeInteger(0, 'sortOrder')).toBeNull()
+    expect(validateOptionalNonNegativeInteger(7, 'sortOrder')).toBeNull()
+    expect(validateOptionalNonNegativeInteger(null, 'sortOrder')).toBeNull()
+    expect(validateOptionalNonNegativeInteger(undefined, 'sortOrder')).toBeNull()
+  })
+
+  it.each([[-1], [1.5], ['3'], [true]])('rejects %o with the exact message', (v) => {
+    expect(validateOptionalNonNegativeInteger(v, 'sortOrder')).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'sortOrder must be a non-negative integer',
+    })
+  })
+})
+
+describe('validateOptionalBoolean', () => {
+  it('accepts booleans and undefined (omitted)', () => {
+    expect(validateOptionalBoolean(true, 'isArchived')).toBeNull()
+    expect(validateOptionalBoolean(false, 'isArchived')).toBeNull()
+    expect(validateOptionalBoolean(undefined, 'isArchived')).toBeNull()
+  })
+
+  it.each([[null], ['true'], [1]])('rejects %o with the exact message', (v) => {
+    expect(validateOptionalBoolean(v, 'isArchived')).toEqual({
+      code: 'INVALID_FIELD',
+      message: 'isArchived must be a boolean',
+    })
   })
 })
 

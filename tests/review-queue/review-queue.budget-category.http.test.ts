@@ -65,26 +65,26 @@ describe('GET review-queue — budget category suggestions', () => {
   })
 
   it('does not match a category name embedded inside another word', async () => {
-    const qi = makeOrderedQueueItem({ proposedMemory: { memoryType: 'ordered_material', summary: 'Ordered timberland boots', materialName: 'boots', quantity: '1', unit: 'pair', supplierName: null, deliveryTiming: null, locationOrUse: null } })
-    const res = await getQueue({ facts: [makeOrderedFact()], queueItems: [qi], categories: [makeBudgetCategory()] })
+    const fact = makeOrderedFact({ materialName: 'boots', summary: 'Ordered timberland boots', unit: 'pair' })
+    const res = await getQueue({ facts: [fact], queueItems: [], categories: [makeBudgetCategory()] })
     const pm = orderedProposed(res.json())
     expect(pm.budgetCategoryId).toBeNull()
     expect(pm.budgetCategorySuggestion).toBeNull()
   })
 
   it('returns no suggestion when two categories match by summary', async () => {
-    const qi = makeOrderedQueueItem({ proposedMemory: { memoryType: 'ordered_material', summary: 'Ordered timber and fixings', materialName: 'mixed', quantity: '1', unit: 'load', supplierName: null, deliveryTiming: null, locationOrUse: null } })
+    const fact = makeOrderedFact({ materialName: 'mixed', summary: 'Ordered timber and fixings' })
     const cats = [makeBudgetCategory(), makeBudgetCategory({ id: CAT_FIXINGS, name: 'fixings' })]
-    const res = await getQueue({ facts: [makeOrderedFact()], queueItems: [qi], categories: cats })
+    const res = await getQueue({ facts: [fact], queueItems: [], categories: cats })
     const pm = orderedProposed(res.json())
     expect(pm.budgetCategoryId).toBeNull()
     expect(pm.budgetCategorySuggestion).toBeNull()
   })
 
   it('prefers a material-name match even when others match by summary', async () => {
-    const qi = makeOrderedQueueItem({ proposedMemory: { memoryType: 'ordered_material', summary: 'Ordered timber and fixings', materialName: 'fixings', quantity: '1', unit: 'box', supplierName: null, deliveryTiming: null, locationOrUse: null } })
+    const fact = makeOrderedFact({ materialName: 'fixings', summary: 'Ordered timber and fixings', unit: 'box' })
     const cats = [makeBudgetCategory(), makeBudgetCategory({ id: CAT_FIXINGS, name: 'fixings' })]
-    const res = await getQueue({ facts: [makeOrderedFact()], queueItems: [qi], categories: cats })
+    const res = await getQueue({ facts: [fact], queueItems: [], categories: cats })
     const pm = orderedProposed(res.json())
     expect(pm.budgetCategorySuggestion).toMatchObject({ budgetCategoryId: CAT_FIXINGS, reason: 'material_name_match' })
   })
