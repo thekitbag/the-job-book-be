@@ -13,19 +13,15 @@ import {
   suggestBudgetCategory,
   assertAssignableCategory,
 } from './budget.js'
+import { MEMORY_TYPES, isCategoryAssignableApiMemoryType } from '../lib/memory-types.js'
 
 // ── Section configuration ─────────────────────────────────────────────────────
 
-const FACT_TYPE_TO_SECTION: Record<string, string> = {
-  ORDERED_MATERIAL: 'ordered_materials',
-  USED_MATERIAL: 'used_materials',
-  LEFTOVER_MATERIAL: 'leftovers',
-  SUPPLIER_DELIVERY_NOTE: 'supplier_delivery_notes',
-  CUSTOMER_CHANGE: 'customer_changes',
-  WATCH_OUT: 'watch_outs',
-  LABOUR: 'labour',
-  UNCLEAR: 'unclear_items',
-}
+// Queue sections come from the shared registry; GENERAL_NOTE facts have no
+// review-queue section (general notes are direct-add memory, not queued facts).
+const FACT_TYPE_TO_SECTION: Record<string, string> = Object.fromEntries(
+  MEMORY_TYPES.filter((t) => t.storedType !== 'GENERAL_NOTE').map((t) => [t.storedType, t.sectionKey]),
+)
 
 const SECTION_LABELS: Record<string, string> = {
   ordered_materials: 'Ordered materials',
@@ -39,14 +35,6 @@ const SECTION_LABELS: Record<string, string> = {
 }
 
 const SECTION_KEYS = Object.keys(SECTION_LABELS)
-
-const VALID_MEMORY_TYPES = new Set([
-  'ordered_material', 'used_material', 'leftover_material',
-  'supplier_delivery_note', 'customer_change', 'watch_out', 'labour', 'general_note',
-])
-
-// Memory types for which a budget category is meaningful in this slice.
-const CATEGORY_ELIGIBLE_TYPES = new Set(['ordered_material', 'labour'])
 
 // Stable deterministic ID derived from the job + sorted source fact IDs.
 // Same inputs always produce the same ID so GET regenerations never invalidate
@@ -160,7 +148,7 @@ async function resolveDecisionCategory(
 
   if (provided === undefined || provided === null) return null
 
-  if (!CATEGORY_ELIGIBLE_TYPES.has(finalMemoryType)) {
+  if (!isCategoryAssignableApiMemoryType(finalMemoryType)) {
     throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
   }
   await assertAssignableCategory(jobId, provided)
@@ -697,4 +685,5 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   }
 }
 
-export { VALID_MEMORY_TYPES }
+// Re-exported from the registry so existing route imports keep working.
+export { VALID_MEMORY_TYPES } from '../lib/memory-types.js'
