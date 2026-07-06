@@ -207,14 +207,6 @@ const ATTEMPTS: Attempt[] = [
   { name: 'get note facts', method: 'GET', url: () => `/api/jobs/${jobId}/notes/${noteId}/facts` },
   { name: 'upload note', method: 'POST', url: () => `/api/jobs/${jobId}/notes`, multipart: true },
   { name: 'list job facts', method: 'GET', url: () => `/api/jobs/${jobId}/facts` },
-  { name: 'review draft', method: 'GET', url: () => `/api/jobs/${jobId}/review-draft` },
-  {
-    name: 'submit review decision',
-    method: 'POST',
-    url: () => `/api/jobs/${jobId}/review-decisions`,
-    payload: () => ({ action: 'confirm', candidateFactId: factId }),
-  },
-  { name: 'list memory', method: 'GET', url: () => `/api/jobs/${jobId}/memory` },
   { name: 'review queue', method: 'GET', url: () => `/api/jobs/${jobId}/review-queue` },
   {
     name: 'queue decision',

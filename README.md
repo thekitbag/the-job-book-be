@@ -103,7 +103,6 @@ Route families (all under `/api`, job routes scoped to the authenticated owner):
 - `jobs/:jobId/notes` — idempotent multipart audio upload (`audio/webm`, max 25 MB), list/get, transcript
 - `jobs/:jobId/facts`, `notes/:noteId/facts` — candidate facts
 - `jobs/:jobId/review-queue`, `review-queue-decisions` — grouped review queue and confirm/correct/dismiss decisions
-- `jobs/:jobId/review-draft`, `review-decisions`, `memory` — legacy review flow
 - `jobs/:jobId/memory-view` — trusted memory sections, cost/labour summaries (note: not read-only; it refreshes queue items)
 - `jobs/:jobId/memory-items` — direct add, patch, verify
 - `jobs/:jobId/budget-categories`, `budget-summary` — budgets and known spend

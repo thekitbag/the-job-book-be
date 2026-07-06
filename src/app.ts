@@ -15,7 +15,6 @@ import type { ExtractionProvider } from './extraction/index.js'
 import { createEmailProvider } from './email/index.js'
 import type { EmailProvider } from './email/index.js'
 import factsRoutes from './routes/facts.js'
-import reviewRoutes from './routes/review.js'
 import reviewQueueRoutes from './routes/review-queue.js'
 import inspectionRoutes from './routes/inspection.js'
 import memoryViewRoutes from './routes/memory-view.js'
@@ -72,7 +71,6 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(jobsRoutes)
   fastify.register(notesRoutes, { storage, transcription, extraction })
   fastify.register(factsRoutes)
-  fastify.register(reviewRoutes)
   fastify.register(reviewQueueRoutes)
   fastify.register(inspectionRoutes)
   fastify.register(memoryViewRoutes)
