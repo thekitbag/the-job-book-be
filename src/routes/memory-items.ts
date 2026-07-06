@@ -1,15 +1,38 @@
 import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyReply } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
-import { VALID_MEMORY_TYPES } from '../services/review-queue.js'
 import { patchMemoryItem, verifyMemoryItem, createMemoryItem } from '../services/memory-items.js'
 import { handleServiceError } from './jobs.js'
+import {
+  validateOptionalDecimal,
+  validateOptionalCostQualifier,
+  validateOptionalUncertaintyResolution,
+  validateMemoryTargetType,
+  validateBudgetCategoryRef,
+} from '../lib/request-validation.js'
+import type { ValidationError } from '../lib/request-validation.js'
 
-const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
-function isValidDecimalString(v: unknown): boolean {
-  return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
+// Runs the shared field validators that apply to both create and patch bodies;
+// returns the first error, or null when every present field is acceptable.
+function memoryFieldsError(body: {
+  costAmount?: unknown
+  totalCostAmount?: unknown
+  labourHours?: unknown
+  costQualifier?: unknown
+  budgetCategoryId?: unknown
+}): ValidationError | null {
+  return (
+    validateOptionalDecimal(body.costAmount, 'costAmount') ??
+    validateOptionalDecimal(body.totalCostAmount, 'totalCostAmount') ??
+    validateOptionalDecimal(body.labourHours, 'labourHours') ??
+    validateOptionalCostQualifier(body.costQualifier) ??
+    ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null)
+  )
 }
-const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown', 'per_hour'])
-const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
+
+function sendError(reply: FastifyReply, error: ValidationError) {
+  return reply.code(400).send(error)
+}
 
 interface CreateBody {
   memoryType?: string
@@ -38,22 +61,12 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { jobId } = request.params
       const body = request.body ?? {}
-      const invalid = (message: string) =>
-        reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message })
 
       if (!body.memoryType) {
         return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType is required' })
       }
-      if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
-        return invalid('memoryType must be a valid non-unclear memory type')
-      }
-      if (body.costAmount != null && !isValidDecimalString(body.costAmount)) return invalid('costAmount must be a decimal string')
-      if (body.totalCostAmount != null && !isValidDecimalString(body.totalCostAmount)) return invalid('totalCostAmount must be a decimal string')
-      if (body.labourHours != null && !isValidDecimalString(body.labourHours)) return invalid('labourHours must be a decimal string')
-      if (body.costQualifier != null && !VALID_QUALIFIERS.has(body.costQualifier)) return invalid('costQualifier must be each, total, per_hour, approx, or unknown')
-      if ('budgetCategoryId' in body && body.budgetCategoryId !== null && typeof body.budgetCategoryId !== 'string') {
-        return invalid('budgetCategoryId must be a string or null')
-      }
+      const error = validateMemoryTargetType(body.memoryType) ?? memoryFieldsError(body)
+      if (error) return sendError(reply, error)
 
       try {
         const result = await createMemoryItem(jobId, request.userId, body as never)
@@ -96,30 +109,20 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!('budgetCategoryId' in body)) {
         return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType or budgetCategoryId is required' })
       }
-    } else if (!VALID_MEMORY_TYPES.has(body.memoryType)) {
-      return reply.code(400).send({
-        code: ErrorCode.INVALID_FIELD,
-        message: 'memoryType must be a valid non-unclear memory type',
-      })
+    } else {
+      const typeError = validateMemoryTargetType(body.memoryType)
+      if (typeError) return sendError(reply, typeError)
     }
-    if (body.costAmount != null && !isValidDecimalString(body.costAmount)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costAmount must be a decimal string' })
-    }
-    if (body.totalCostAmount != null && !isValidDecimalString(body.totalCostAmount)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'totalCostAmount must be a decimal string' })
-    }
-    if (body.costQualifier != null && !VALID_QUALIFIERS.has(body.costQualifier)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'costQualifier must be each, total, per_hour, approx, or unknown' })
-    }
-    if (body.labourHours != null && !isValidDecimalString(body.labourHours)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'labourHours must be a decimal string' })
-    }
-    if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
-    }
-    if ('budgetCategoryId' in body && body.budgetCategoryId !== null && typeof body.budgetCategoryId !== 'string') {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId must be a string or null' })
-    }
+    // Field order matches the original checks so the first-reported error for
+    // multi-invalid bodies is unchanged.
+    const error =
+      validateOptionalDecimal(body.costAmount, 'costAmount') ??
+      validateOptionalDecimal(body.totalCostAmount, 'totalCostAmount') ??
+      validateOptionalCostQualifier(body.costQualifier) ??
+      validateOptionalDecimal(body.labourHours, 'labourHours') ??
+      validateOptionalUncertaintyResolution(body.uncertaintyResolution) ??
+      ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null)
+    if (error) return sendError(reply, error)
 
     try {
       const result = await patchMemoryItem(jobId, memoryItemId, request.userId, body as never)

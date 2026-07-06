@@ -684,6 +684,3 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     sourceCandidateFactIds,
   }
 }
-
-// Re-exported from the registry so existing route imports keep working.
-export { VALID_MEMORY_TYPES } from '../lib/memory-types.js'

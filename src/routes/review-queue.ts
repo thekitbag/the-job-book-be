@@ -1,13 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
-import { getReviewQueue, submitQueueDecision, VALID_MEMORY_TYPES } from '../services/review-queue.js'
-
-// Decimal string: optional digits, optional dot, optional further digits; not empty.
-const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/
-
-function isValidDecimalString(v: unknown): boolean {
-  return typeof v === 'string' && DECIMAL_STRING_RE.test(v)
-}
+import { getReviewQueue, submitQueueDecision } from '../services/review-queue.js'
+import {
+  validateOptionalDecimal,
+  validateOptionalCostQualifier,
+  validateOptionalUncertaintyResolution,
+  validateMemoryTargetType,
+  validateBudgetCategoryRef,
+} from '../lib/request-validation.js'
 
 const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /api/jobs/:jobId/review-queue
@@ -70,39 +70,26 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'action must be confirm, correct, or dismiss' })
     }
 
-    const VALID_UNCERTAINTY_RESOLUTIONS = new Set(['resolved', 'still_unsure'])
-    if (body.uncertaintyResolution != null && !VALID_UNCERTAINTY_RESOLUTIONS.has(body.uncertaintyResolution)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'uncertaintyResolution must be resolved or still_unsure' })
-    }
-
-    const isValidCategoryRef = (v: unknown) => v === null || typeof v === 'string'
-    if ('budgetCategoryId' in body && !isValidCategoryRef(body.budgetCategoryId)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId must be a string or null' })
-    }
-    if (body.corrected && 'budgetCategoryId' in body.corrected && !isValidCategoryRef(body.corrected.budgetCategoryId)) {
-      return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.budgetCategoryId must be a string or null' })
-    }
+    // Field order matches the original checks so the first-reported error for
+    // multi-invalid bodies is unchanged.
+    const sharedError =
+      validateOptionalUncertaintyResolution(body.uncertaintyResolution) ??
+      ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null) ??
+      (body.corrected && 'budgetCategoryId' in body.corrected
+        ? validateBudgetCategoryRef(body.corrected.budgetCategoryId, 'corrected.budgetCategoryId')
+        : null)
+    if (sharedError) return reply.code(400).send(sharedError)
 
     if (body.action === 'correct') {
       if (!body.corrected?.summary) return missing('corrected.summary')
       if (!body.corrected?.memoryType) return missing('corrected.memoryType')
-      if (!VALID_MEMORY_TYPES.has(body.corrected.memoryType)) {
-        return reply.code(400).send({
-          code: ErrorCode.INVALID_FIELD,
-          message: 'corrected.memoryType must be a valid non-unclear memory type',
-        })
-      }
       const c = body.corrected
-      if (c.costAmount != null && !isValidDecimalString(c.costAmount)) {
-        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costAmount must be a decimal string' })
-      }
-      if (c.totalCostAmount != null && !isValidDecimalString(c.totalCostAmount)) {
-        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.totalCostAmount must be a decimal string' })
-      }
-      const VALID_QUALIFIERS = new Set(['each', 'total', 'approx', 'unknown', 'per_hour'])
-      if (c.costQualifier != null && !VALID_QUALIFIERS.has(c.costQualifier)) {
-        return reply.code(400).send({ code: ErrorCode.INVALID_FIELD, message: 'corrected.costQualifier must be each, total, per_hour, approx, or unknown' })
-      }
+      const correctedError =
+        validateMemoryTargetType(c.memoryType, 'corrected.memoryType') ??
+        validateOptionalDecimal(c.costAmount, 'corrected.costAmount') ??
+        validateOptionalDecimal(c.totalCostAmount, 'corrected.totalCostAmount') ??
+        validateOptionalCostQualifier(c.costQualifier, 'corrected.costQualifier')
+      if (correctedError) return reply.code(400).send(correctedError)
     }
 
     try {
