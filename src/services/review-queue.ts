@@ -684,4 +684,3 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     sourceCandidateFactIds,
   }
 }
-
