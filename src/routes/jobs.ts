@@ -51,6 +51,10 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.MEMORY_ITEM_NOT_FOUND]: 404,
   [ErrorCode.BUDGET_CATEGORY_NOT_FOUND]: 404,
   [ErrorCode.BUDGET_CATEGORY_ARCHIVED]: 400,
+  [ErrorCode.PHOTO_UNSUPPORTED_TYPE]: 415,
+  [ErrorCode.PHOTO_TOO_LARGE]: 413,
+  [ErrorCode.PHOTO_NOT_FOUND]: 404,
+  [ErrorCode.PHOTO_LINK_TARGET_NOT_FOUND]: 404,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {
