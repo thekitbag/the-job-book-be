@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SYSTEM_PROMPT } from '../src/extraction/openai.js'
+import { SYSTEM_PROMPT, buildUserPrompt } from '../src/extraction/openai.js'
 
 describe('OpenAI extraction prompt — labour', () => {
   it('documents the labour fact type and fields', () => {
@@ -14,6 +14,32 @@ describe('OpenAI extraction prompt — labour', () => {
     expect(SYSTEM_PROMPT).toContain('fitting the cladding')
     expect(SYSTEM_PROMPT).toContain('£35 an hour')
     expect(SYSTEM_PROMPT).toContain('Labour on the roof')
+  })
+
+  it('documents happenedAt and relative-day resolution', () => {
+    expect(SYSTEM_PROMPT).toContain('happenedAt')
+    expect(SYSTEM_PROMPT.toLowerCase()).toContain('yesterday')
+    expect(SYSTEM_PROMPT.toLowerCase()).toMatch(/recorded (date|on)/)
+  })
+
+  it('requires one labour fact per person — never a merged summary fact', () => {
+    expect(SYSTEM_PROMPT).toContain('Mike 4 hours, Kurt 6')
+    expect(SYSTEM_PROMPT.toLowerCase()).toMatch(/one labour fact per person|separate labour fact/)
+  })
+})
+
+describe('OpenAI extraction user prompt', () => {
+  it('includes the note recorded date so relative days can be resolved', () => {
+    const prompt = buildUserPrompt({
+      transcriptId: 'tx-1',
+      noteId: 'n-1',
+      jobId: 'j-1',
+      transcriptText: 'Mike 4 hours, Kurt 6.',
+      noteCapturedAt: new Date('2026-07-08T09:00:00.000Z'),
+      jobContext: { title: 'Garden Room', jobType: 'construction' },
+    })
+    expect(prompt).toContain('2026-07-08')
+    expect(prompt).toContain('Mike 4 hours, Kurt 6.')
   })
 })
 

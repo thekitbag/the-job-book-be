@@ -10,6 +10,7 @@ import {
 } from '../lib/cost-utils.js'
 import { assertAssignableCategory } from './budget.js'
 import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
+import { ukLocalNoon } from '../lib/dates.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -18,8 +19,11 @@ async function verifyJobOwnership(jobId: string, userId: string) {
 }
 
 // Parse an optional ISO date/time string to a Date, rejecting invalid input.
+// A date-only value (YYYY-MM-DD) is stored as UK local noon so the intended
+// day never drifts across timezones.
 function parseHappenedAt(value: string | null | undefined): Date | null {
   if (value == null || value === '') return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return ukLocalNoon(value)
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) {
     throw { code: ErrorCode.INVALID_FIELD, message: 'happenedAt must be a valid ISO date/time' }

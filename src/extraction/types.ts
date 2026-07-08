@@ -28,6 +28,10 @@ export interface CandidateFactDraft {
   labourHours?: string
   labourPerson?: string
   labourTask?: string
+  // Effective day the fact happened: resolved YYYY-MM-DD, full ISO datetime,
+  // or a relative "today"/"yesterday" token; the worker resolves it against
+  // the source note capture date.
+  happenedAt?: string | null
   confidenceLabel: ConfidenceLabel
   confidenceReason: string
   uncertaintyFlags: string[]
@@ -38,6 +42,7 @@ export interface ExtractionInput {
   noteId: string
   jobId: string
   transcriptText: string
+  noteCapturedAt: Date
   jobContext: { title: string; jobType: string }
 }
 

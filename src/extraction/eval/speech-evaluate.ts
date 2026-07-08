@@ -17,6 +17,7 @@ export async function runSpeechEvaluation(
       noteId: `speech-note-${fixture.id}`,
       jobId: `speech-job-${fixture.id}`,
       transcriptText: fixture.transcriptText,
+      noteCapturedAt: new Date(),
       jobContext: fixture.jobContext,
     }
 

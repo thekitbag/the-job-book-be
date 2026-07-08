@@ -244,6 +244,29 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     rows: uncategorizedRows,
   }
 
+  // System Labour spend group: every safe trusted labour row once, regardless
+  // of category assignment. An active category literally named "labour"
+  // (trimmed, case-insensitive) supplies the budget/remaining figures; without
+  // one the rows still appear with null budget fields — the pilot never has to
+  // create a Labour category to see labour spend. Rows may also appear in
+  // categories/uncategorized for older clients; totals below already count
+  // each safe row exactly once, so this group never double-counts.
+  const labourRows = safe.filter((r) => r.memoryType === 'LABOUR').map(toSpendRow)
+  const labourCategory = categories.find((c) => c.name.trim().toLowerCase() === 'labour') ?? null
+  const labourSpend = sumRows(labourRows)
+  const labourMath = budgetMath(labourCategory?.budgetAmount ?? null, labourSpend)
+  const labour = {
+    ...spendBlock(labourRows),
+    budgetCategory: labourCategory ? normalizeCategory(labourCategory) : null,
+    budgetAmount: labourCategory?.budgetAmount ?? null,
+    budgetCurrency: labourCategory?.budgetAmount != null ? (labourCategory.budgetCurrency ?? 'GBP') : null,
+    budgetLabel: labourCategory?.budgetAmount != null ? `${gbp(labourCategory.budgetAmount)} budget` : null,
+    remainingAmount: labourMath.remainingAmount,
+    remainingLabel: labourMath.remainingLabel,
+    overBudget: labourMath.overBudget,
+    rows: labourRows,
+  }
+
   // Totals: budget sums active category budgets; known spend sums every safe row.
   const totalBudgetNum = categories.reduce((acc, c) => acc + (parseAmount(c.budgetAmount) ?? 0), 0)
   const anyBudget = categories.some((c) => c.budgetAmount != null)
@@ -270,6 +293,7 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     generatedAt: new Date().toISOString(),
     categories: categorySummaries,
     uncategorized,
+    labour,
     totals: {
       budgetAmount: totalBudgetAmount,
       budgetCurrency: anyBudget ? 'GBP' : null,

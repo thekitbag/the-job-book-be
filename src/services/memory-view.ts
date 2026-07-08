@@ -10,6 +10,7 @@ import {
 import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { SpendClassifiable } from '../lib/spend-classification.js'
 import { MEMORY_TYPES } from '../lib/memory-types.js'
+import { ukLocalDayString } from '../lib/dates.js'
 
 // Trusted-memory sections come from the shared registry; UNCLEAR is excluded
 // because it is never a trusted memory type and has no memory-view section.
@@ -336,6 +337,92 @@ function buildLabourCostSummary(items: SpendClassifiable[]) {
   }
 }
 
+// ── Labour hours summary (daily labour view) ──────────────────────────────────
+
+// Unresolved flags that do not make the *hours* uncertain: cost-only doubt
+// keeps the money out of spend but the hours still count toward safe totals.
+const HOURS_SAFE_FLAGS = new Set(['cost_uncertain'])
+
+interface LabourHoursSource {
+  id: string
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
+  happenedAt: Date | null
+  createdAt: Date
+  unresolvedFlags: string[]
+  sourceFact: { sourceNote: { capturedAt: Date } } | null
+}
+
+const formatHoursTotal = (n: number) => String(Math.round(n * 100) / 100)
+
+// Authoritative daily labour summary: group trusted labour memory by UK local
+// calendar day (happenedAt, falling back to the source note capture date, then
+// the created date), newest day first. Hour totals are safe totals: strict
+// positive decimal hours with no hour-affecting unresolved flags. Excluded
+// rows stay visible as worth checking.
+function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifiable>) {
+  const byDay = new Map<string, Array<LabourHoursSource & SpendClassifiable>>()
+  for (const m of items) {
+    const effective = m.happenedAt ?? m.sourceFact?.sourceNote.capturedAt ?? m.createdAt
+    const day = ukLocalDayString(effective)
+    const group = byDay.get(day)
+    if (group) group.push(m)
+    else byDay.set(day, [m])
+  }
+
+  const days = [...byDay.entries()]
+    .sort(([a], [b]) => (a < b ? 1 : -1))
+    .map(([date, dayItems]) => {
+      let dayTotal = 0
+      let anyIncluded = false
+      const rows = dayItems.map((m) => {
+        const hours = strictParsePositive(m.labourHours)
+        const worthChecking = m.unresolvedFlags.length > 0
+        const hoursUncertain = m.unresolvedFlags.some((f) => !HOURS_SAFE_FLAGS.has(f))
+        const includedInHourTotal = hours !== null && !hoursUncertain
+        if (includedInHourTotal) {
+          dayTotal += hours
+          anyIncluded = true
+        }
+        // Money is secondary copy in the labour view: only a trusted spend
+        // classification carries a line total.
+        const classified = classifySpend(m)
+        const included = classified.kind === 'included' ? classified.row : null
+        return {
+          memoryItemId: m.id,
+          labourPerson: m.labourPerson,
+          labourTask: m.labourTask,
+          labourHours: m.labourHours,
+          hoursLabel: m.labourHours ? `${m.labourHours}h` : null,
+          happenedAt: m.happenedAt,
+          includedInHourTotal,
+          worthChecking,
+          lineTotalAmount: included?.lineTotalAmount ?? null,
+          lineTotalCurrency: included ? included.lineTotalCurrency : null,
+          lineTotalLabel: included?.lineTotalLabel ?? null,
+        }
+      })
+      const totalHours = anyIncluded ? formatHoursTotal(dayTotal) : null
+      return {
+        date,
+        totalHours,
+        totalLabel: totalHours !== null ? `${totalHours}h day total` : null,
+        items: rows,
+      }
+    })
+
+  const jobTotalNum = days.reduce((acc, d) => acc + (d.totalHours !== null ? parseFloat(d.totalHours) : 0), 0)
+  const anyTotal = days.some((d) => d.totalHours !== null)
+  const totalHours = anyTotal ? formatHoursTotal(jobTotalNum) : null
+
+  return {
+    totalHours,
+    totalLabel: totalHours !== null ? `${totalHours}h job total` : null,
+    days,
+  }
+}
+
 // Combine ordered-material and labour known cost into a single job-level total.
 // Equals budget-summary.totals.knownSpendAmount for the same GBP state.
 function buildTotalKnownCost(
@@ -481,13 +568,16 @@ export async function getMemoryView(jobId: string, userId: string) {
     return { key, label: SUMMARY_SECTION_LABELS[key], items: consolidateSummaryRows(rawRows) }
   })
 
+  const labourItems = bySection.get('labour') ?? []
   const orderedMaterials = buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? [])
-  const labour = buildLabourCostSummary(bySection.get('labour') ?? [])
+  const labour = buildLabourCostSummary(labourItems)
   const costSummary = {
     orderedMaterials,
     labour,
     totalKnownCost: buildTotalKnownCost(orderedMaterials, labour),
   }
+
+  const labourHoursSummary = buildLabourHoursSummary(labourItems)
 
   return {
     job: {
@@ -503,6 +593,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     sections,
     summarySections,
     costSummary,
+    labourHoursSummary,
     stillToCheck: {
       count: stillToCheckItems.length,
       items: stillToCheckItems,

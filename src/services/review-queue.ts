@@ -64,6 +64,7 @@ interface ProposedMemory {
   labourHours: string | null
   labourPerson: string | null
   labourTask: string | null
+  happenedAt: string | null
 }
 
 interface GroupedItemData {
@@ -95,6 +96,7 @@ type FactWithContext = {
   labourHours: string | null
   labourPerson: string | null
   labourTask: string | null
+  happenedAt: Date | null
   confidenceLabel: string
   uncertaintyFlags: string[]
   sourceNoteId: string
@@ -119,6 +121,7 @@ export interface CorrectedFields {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  happenedAt?: string | null
   budgetCategoryId?: string | null
 }
 
@@ -174,6 +177,7 @@ function extractProposedMemory(f: FactWithContext): ProposedMemory {
     labourHours: f.labourHours,
     labourPerson: f.labourPerson,
     labourTask: f.labourTask,
+    happenedAt: f.happenedAt ? f.happenedAt.toISOString() : null,
   }
 }
 
@@ -485,6 +489,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
     labourHours: m.labourHours,
     labourPerson: m.labourPerson,
     labourTask: m.labourTask,
+    happenedAt: m.happenedAt,
     unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
     lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
     uncertaintyFlags: m.unresolvedFlags,
@@ -570,6 +575,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           labourHours: pm.labourHours,
           labourPerson: pm.labourPerson,
           labourTask: pm.labourTask,
+          happenedAt: pm.happenedAt ? new Date(pm.happenedAt) : null,
           unresolvedFlags,
           budgetCategoryId,
         },
@@ -609,6 +615,17 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
 
     // An explicit total that conflicts with quantity × unit cost must stay worth
     // checking, even if the reviewer marked the item resolved.
+    // The effective day: an explicit corrected value (null clears) wins; when the
+    // correction doesn't mention it, the proposed draft's day is preserved so a
+    // person/hours edit never silently wipes the labour day.
+    const correctedHappenedAt =
+      corrected.happenedAt !== undefined
+        ? (corrected.happenedAt ? new Date(corrected.happenedAt) : null)
+        : (pm.happenedAt ? new Date(pm.happenedAt) : null)
+    if (correctedHappenedAt !== null && Number.isNaN(correctedHappenedAt.getTime())) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'corrected.happenedAt must be a valid ISO date/time' }
+    }
+
     const conflict = hasCostConflict(corrected.quantity, corrected.costAmount, corrected.costQualifier, correctedTotalCostAmount)
     const baseFlags = payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
     const unresolvedFlags =
@@ -648,6 +665,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           labourHours: corrected.labourHours ?? null,
           labourPerson: corrected.labourPerson ?? null,
           labourTask: corrected.labourTask ?? null,
+          happenedAt: correctedHappenedAt,
           unresolvedFlags,
           budgetCategoryId,
         },

@@ -7,6 +7,7 @@ import {
   validateOptionalUncertaintyResolution,
   validateMemoryTargetType,
   validateBudgetCategoryRef,
+  validateOptionalIsoDate,
 } from '../lib/request-validation.js'
 
 const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
@@ -51,6 +52,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         labourHours?: string | null
         labourPerson?: string | null
         labourTask?: string | null
+        happenedAt?: string | null
         budgetCategoryId?: string | null
       }
       reason?: string
@@ -88,7 +90,8 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         validateMemoryTargetType(c.memoryType, 'corrected.memoryType') ??
         validateOptionalDecimal(c.costAmount, 'corrected.costAmount') ??
         validateOptionalDecimal(c.totalCostAmount, 'corrected.totalCostAmount') ??
-        validateOptionalCostQualifier(c.costQualifier, 'corrected.costQualifier')
+        validateOptionalCostQualifier(c.costQualifier, 'corrected.costQualifier') ??
+        validateOptionalIsoDate(c.happenedAt, 'corrected.happenedAt')
       if (correctedError) return reply.code(400).send(correctedError)
     }
 

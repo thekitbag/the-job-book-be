@@ -85,6 +85,16 @@ export function validateBudgetCategoryRef(
   return invalid(`${fieldName} must be a string or null`)
 }
 
+// Optional ISO date/time field (happenedAt): null clears, a present string must
+// parse to a valid Date.
+export function validateOptionalIsoDate(value: unknown, fieldName: string): ValidationError | null {
+  if (value == null) return null
+  if (typeof value !== 'string' || Number.isNaN(new Date(value).getTime())) {
+    return invalid(`${fieldName} must be a valid ISO date/time`)
+  }
+  return null
+}
+
 // A present required-or-provided name-like field: non-empty after trim, with a
 // maximum trimmed length. Requiredness (MISSING_FIELD) stays in the routes.
 export function validateNonEmptyBoundedString(
