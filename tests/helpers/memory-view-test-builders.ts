@@ -133,6 +133,33 @@ export function makeMemoryItem(overrides?: object) {
   }
 }
 
+// A trusted labour memory item (hours-only by default; no sourceFact so the
+// effective-day fallback is exercised explicitly via overrides).
+export function makeLabourMemoryItem(overrides?: object) {
+  return makeMemoryItem({
+    memoryType: 'LABOUR',
+    isManual: true,
+    sourceCandidateFactId: null,
+    sourceFact: null,
+    summary: 'Mike — 4 hours',
+    materialName: null,
+    quantity: null,
+    unit: null,
+    supplierName: null,
+    deliveryTiming: null,
+    locationOrUse: null,
+    costAmount: null,
+    costCurrency: null,
+    costQualifier: null,
+    totalCostAmount: null,
+    labourHours: '4',
+    labourPerson: 'Mike',
+    labourTask: null,
+    happenedAt: new Date('2026-06-12T11:00:00.000Z'),
+    ...overrides,
+  })
+}
+
 export function makeQueueItem(overrides?: object) {
   return {
     id: QUEUE_ITEM_ID,

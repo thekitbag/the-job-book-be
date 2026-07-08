@@ -122,6 +122,7 @@ export function makeFact(overrides?: object) {
     confidenceLabel: 'MEDIUM',
     confidenceReason: 'Clear from context',
     uncertaintyFlags: [],
+    happenedAt: null,
     extractionProvider: 'fake',
     extractionModel: null,
     extractionSchemaVersion: null,
@@ -189,6 +190,7 @@ export function makeMemoryItem(overrides?: object) {
     supplierName: null,
     deliveryTiming: null,
     locationOrUse: 'back wall',
+    happenedAt: null,
     unresolvedFlags: [],
     createdAt: TODAY_CAPTURE,
     updatedAt: TODAY_CAPTURE,
@@ -260,6 +262,7 @@ export function makeLabourQueueItem(overrides?: object) {
       labourHours: '8',
       labourPerson: 'Tom',
       labourTask: 'electrics',
+      happenedAt: '2026-06-09T11:00:00.000Z',
     },
     ...overrides,
   })

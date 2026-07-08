@@ -2,6 +2,7 @@ import { prisma } from '../db/client.js'
 import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
 import { strictParsePositive, deriveSafeMaterialTotal, deriveSafeLabourTotal, hasCostConflict } from '../lib/cost-utils.js'
+import { resolveDraftHappenedAt, ukLocalDayString, ukLocalNoon } from '../lib/dates.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -20,6 +21,16 @@ function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
     deriveSafeMaterialTotal(fact.quantity, fact.unit, fact.costAmount, fact.costCurrency, fact.costQualifier) ??
     deriveSafeLabourTotal(fact.labourHours, fact.costAmount, fact.costQualifier)
   return derived ?? undefined
+}
+
+// Effective day for a fact. Labour always gets one: a spoken day resolved
+// against the note capture date, else the capture day itself (UK local noon).
+// Other fact types only store a day the provider actually resolved.
+function resolveHappenedAt(fact: CandidateFactDraft, noteCapturedAt: Date): Date | null {
+  const resolved = resolveDraftHappenedAt(fact.happenedAt, noteCapturedAt)
+  if (resolved) return resolved
+  if (fact.factType === 'labour') return ukLocalNoon(ukLocalDayString(noteCapturedAt))
+  return null
 }
 
 function resolveUncertaintyFlags(fact: CandidateFactDraft): string[] {
@@ -62,6 +73,7 @@ export async function runExtraction(
       noteId: transcript.noteId,
       jobId: transcript.note.jobId,
       transcriptText: transcript.text,
+      noteCapturedAt: transcript.note.capturedAt,
       jobContext: {
         title: transcript.note.job.title,
         jobType: transcript.note.job.jobType,
@@ -104,6 +116,7 @@ export async function runExtraction(
             labourHours: fact.labourHours ?? null,
             labourPerson: fact.labourPerson ?? null,
             labourTask: fact.labourTask ?? null,
+            happenedAt: resolveHappenedAt(fact, transcript.note.capturedAt),
             confidenceLabel: toDbConfidence(fact.confidenceLabel) as never,
             confidenceReason: fact.confidenceReason,
             uncertaintyFlags: resolveUncertaintyFlags(fact),

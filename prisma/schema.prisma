@@ -218,6 +218,7 @@ model CandidateFact {
   labourHours             String?
   labourPerson            String?
   labourTask              String?
+  happenedAt              DateTime?
   extractionProvider      String?
   extractionModel         String?
   extractionSchemaVersion String?

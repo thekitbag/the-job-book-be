@@ -18,6 +18,7 @@ export async function runEvaluation(
       noteId: `eval-note-${fixture.id}`,
       jobId: `eval-job-${fixture.id}`,
       transcriptText: fixture.transcriptText,
+      noteCapturedAt: new Date(),
       jobContext: fixture.jobContext,
     }
 

@@ -647,3 +647,130 @@ describe('memory-items — labour edits', () => {
     expect(call.data.totalCostAmount).toBe('70')
   })
 })
+
+// ── Labour Tracking V2: system labour group on budget-summary ─────────────────
+
+function makeLabourMemory(overrides?: object) {
+  return makeMemory({
+    id: 'mem-labour-1',
+    memoryType: 'LABOUR',
+    summary: 'Tom did 8 hours on electrics at £35 an hour',
+    materialName: null,
+    quantity: null,
+    unit: null,
+    costAmount: '35',
+    costCurrency: 'GBP',
+    costQualifier: 'per_hour',
+    totalCostAmount: '280',
+    labourHours: '8',
+    labourPerson: 'Tom',
+    labourTask: 'electrics',
+    ...overrides,
+  })
+}
+
+describe('GET /api/jobs/:jobId/budget-summary — labour group', () => {
+  const headers = { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }
+
+  it('exposes trusted labour rows under labour with null budget fields when no Labour category exists', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeLabourMemory()])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    expect(res.statusCode).toBe(200)
+    const labour = res.json<Record<string, any>>().labour
+    expect(labour).toBeDefined()
+    expect(labour.rows).toHaveLength(1)
+    expect(labour.rows[0]).toMatchObject({
+      memoryItemId: 'mem-labour-1',
+      memoryType: 'labour',
+      lineTotalAmount: '280',
+      lineTotalCurrency: 'GBP',
+      labourHours: '8',
+      labourPerson: 'Tom',
+      labourTask: 'electrics',
+    })
+    expect(labour.knownSpendAmount).toBe('280')
+    expect(labour.knownSpendLabel).toBe('£280 known spend')
+    expect(labour.budgetCategory).toBeNull()
+    expect(labour.budgetAmount).toBeNull()
+    expect(labour.remainingAmount).toBeNull()
+    expect(labour.overBudget).toBe(false)
+  })
+
+  it('excludes hours-only labour from the labour spend group', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeLabourMemory({ id: 'mem-hours-only', costAmount: null, costQualifier: null, totalCostAmount: null }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<Record<string, any>>()
+    expect(body.labour.rows).toHaveLength(0)
+    expect(body.labour.knownSpendAmount).toBeNull()
+    expect(body.totals.knownSpendAmount).toBeNull()
+  })
+
+  it('aligns an active category named "labour" (trimmed, case-insensitive) to the labour group', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: 'cat-labour', name: ' Labour ', budgetAmount: '1000', budgetCurrency: 'GBP' }),
+    ])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeLabourMemory()])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const labour = res.json<Record<string, any>>().labour
+    expect(labour.budgetCategory).toMatchObject({ id: 'cat-labour' })
+    expect(labour.budgetAmount).toBe('1000')
+    expect(labour.budgetLabel).toBe('£1000 budget')
+    expect(labour.remainingAmount).toBe('720')
+    expect(labour.remainingLabel).toBe('£720 remaining')
+    expect(labour.overBudget).toBe(false)
+  })
+
+  it('reports over budget when trusted labour spend exceeds the Labour category budget', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: 'cat-labour', name: 'labour', budgetAmount: '200', budgetCurrency: 'GBP' }),
+    ])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeLabourMemory()])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const labour = res.json<Record<string, any>>().labour
+    expect(labour.overBudget).toBe(true)
+    expect(labour.remainingLabel).toBe('£80 over budget')
+  })
+
+  it('counts labour spend exactly once in totals even though rows also appear in uncategorized', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeLabourMemory(),
+      makeMemory({ id: 'mem-timber', totalCostAmount: '1850' }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<Record<string, any>>()
+    // 1850 material + 280 labour, labour counted once
+    expect(body.totals.knownSpendAmount).toBe('2130')
+    expect(body.labour.rows).toHaveLength(1)
+    // backward-compatible: labour row may still appear in uncategorized; the
+    // labour group must not change the authoritative total
+    const uncatIds = body.uncategorized.rows.map((r: any) => r.memoryItemId)
+    expect(uncatIds).toContain('mem-labour-1')
+  })
+
+  it('keeps material rows out of the labour group', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeMemory({ id: 'mem-timber', totalCostAmount: '1850' }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<Record<string, any>>()
+    expect(body.labour.rows).toHaveLength(0)
+    expect(body.uncategorized.rows.map((r: any) => r.memoryItemId)).toContain('mem-timber')
+  })
+
+  it('excludes worth-checking labour from the labour group rows', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeLabourMemory({ id: 'mem-flagged', unresolvedFlags: ['cost_uncertain'] }),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    expect(res.json<Record<string, any>>().labour.rows).toHaveLength(0)
+  })
+})

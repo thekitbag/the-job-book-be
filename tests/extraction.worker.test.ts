@@ -31,6 +31,9 @@ const TRANSCRIPT_ID = 'tx-worker-1'
 const NOTE_ID = 'note-worker-1'
 const JOB_ID = 'job-worker-1'
 
+// Captured 09:00 UTC on 8 July 2026 — UK local day 2026-07-08 (BST)
+const CAPTURED_AT = new Date('2026-07-08T09:00:00.000Z')
+
 function makeTranscript(overrides?: object) {
   return {
     id: TRANSCRIPT_ID,
@@ -42,6 +45,7 @@ function makeTranscript(overrides?: object) {
       id: NOTE_ID,
       jobId: JOB_ID,
       serverStatus: 'TRANSCRIBED',
+      capturedAt: CAPTURED_AT,
       job: { id: JOB_ID, title: 'Garden Room Build', jobType: 'construction' },
     },
     ...overrides,
@@ -741,6 +745,101 @@ describe('runExtraction — labour facts', () => {
     expect(d.costQualifier).toBe('total')
     expect(d.totalCostAmount).toBe('600')
     expect(d.labourHours).toBeNull()
+  })
+})
+
+describe('runExtraction — labour happenedAt (effective day)', () => {
+  function labourStub(facts: any[]) {
+    return {
+      name: 'stub', model: 'stub-v1',
+      async extractFacts() { return { facts, schemaVersion: 'v1' } },
+    } as any
+  }
+  const baseLabour = {
+    factType: 'labour', summary: 'Mike worked 4 hours', labourPerson: 'Mike', labourHours: '4',
+    confidenceLabel: 'high', confidenceReason: 'stated', uncertaintyFlags: [],
+  }
+
+  it('creates two labour candidate facts for "Mike 4 hours, Kurt 6"', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Mike 4 hours, Kurt 6.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([
+      { ...baseLabour },
+      { ...baseLabour, summary: 'Kurt worked 6 hours', labourPerson: 'Kurt', labourHours: '6' },
+    ]))
+
+    const rows = vi.mocked(prisma.candidateFact.create as any).mock.calls.map((c: any) => c[0].data)
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r: any) => [r.labourPerson, r.labourHours])).toEqual([['Mike', '4'], ['Kurt', '6']])
+    expect(rows.every((r: any) => r.factType === 'LABOUR')).toBe(true)
+  })
+
+  it('defaults labour happenedAt to the source note capture day at UK local noon when no day is spoken', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Mike 4 hours.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{ ...baseLabour }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    // captured 2026-07-08 (BST) → local noon is 11:00 UTC
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-08T11:00:00.000Z')
+  })
+
+  it('resolves a provider "yesterday" relative to the source note capture date', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Tom did 8 hours on electrics yesterday at £35 an hour.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{
+      ...baseLabour, summary: 'Tom did 8 hours on electrics at £35 an hour',
+      labourPerson: 'Tom', labourHours: '8', labourTask: 'electrics',
+      costAmount: '35', costCurrency: 'GBP', costQualifier: 'per_hour',
+      happenedAt: 'yesterday',
+    }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-07T11:00:00.000Z')
+    expect(data.totalCostAmount).toBe('280')
+  })
+
+  it('resolves a provider date-only happenedAt to UK local noon of that day', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Mike did 4 hours on Monday the sixth.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{ ...baseLabour, happenedAt: '2026-07-06' }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-06T11:00:00.000Z')
+  })
+
+  it('falls back to the capture day when a labour happenedAt value is unresolvable', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Mike did 4 hours sometime last week.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{ ...baseLabour, happenedAt: 'sometime last week' }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-08T11:00:00.000Z')
+  })
+
+  it('leaves happenedAt null for non-labour facts that state no day', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Used 6 OSB boards.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{
+      factType: 'used_material', summary: 'Used 6 OSB boards', materialName: 'OSB',
+      quantity: '6', unit: 'boards',
+      confidenceLabel: 'high', confidenceReason: 'stated', uncertaintyFlags: [],
+    }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt).toBeNull()
   })
 })
 

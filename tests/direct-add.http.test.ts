@@ -294,3 +294,79 @@ describe('auto-total unit cost — direct add and patch derivation', () => {
     expect(res.json<any>().uncertaintyFlags).toContain('cost_uncertain')
   })
 })
+
+// ── Labour Tracking V2: effective-day semantics on create and patch ───────────
+
+describe('labour happenedAt — create/patch day semantics', () => {
+  const EXISTING_DAY = new Date('2026-06-30T11:00:00.000Z')
+
+  function labourRow(overrides?: any) {
+    return {
+      id: 'm1', jobId: JOB_ID, reviewDecisionId: 'rd-1', sourceCandidateFactId: null, isManual: true,
+      memoryType: 'LABOUR', summary: 'Tom — 8 hours', materialName: null, quantity: null, unit: null,
+      supplierName: null, deliveryTiming: null, locationOrUse: null, costAmount: null, costCurrency: null,
+      costQualifier: null, totalCostAmount: null, labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
+      happenedAt: EXISTING_DAY, unresolvedFlags: [], budgetCategoryId: null, createdAt: new Date(), updatedAt: new Date(),
+      ...overrides,
+    }
+  }
+
+  function patch(payload: object) {
+    return app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}/memory-items/m1`, headers, payload })
+  }
+
+  beforeEach(async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(labourRow())
+    vi.mocked(prisma.memoryItem.update as any).mockImplementation(async ({ data }: any) => ({ ...labourRow(), ...data, sourceFact: null }))
+  })
+
+  it('stores a date-only happenedAt as UK local noon on create', async () => {
+    const res = await post({ memoryType: 'labour', labourHours: '4', labourPerson: 'Mike', happenedAt: '2026-07-01' })
+    expect(res.statusCode).toBe(201)
+    expect((await lastCreateData()).happenedAt?.toISOString()).toBe('2026-07-01T11:00:00.000Z')
+  })
+
+  it('stores a date-only happenedAt as UK local noon on patch', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await patch({ memoryType: 'labour', summary: 'Tom — 8 hours', happenedAt: '2026-07-02' })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
+    expect(call.data.happenedAt?.toISOString()).toBe('2026-07-02T11:00:00.000Z')
+  })
+
+  it('preserves the existing happenedAt when the patch omits it', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await patch({ memoryType: 'labour', summary: 'Tom — 8 hours', labourHours: '9' })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
+    expect(call.data.happenedAt?.toISOString()).toBe(EXISTING_DAY.toISOString())
+    expect(call.data.labourHours).toBe('9')
+  })
+
+  it('clears happenedAt when the patch sends null', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await patch({ memoryType: 'labour', summary: 'Tom — 8 hours', happenedAt: null })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
+    expect(call.data.happenedAt).toBeNull()
+  })
+
+  it('rejects an invalid happenedAt on patch with 400', async () => {
+    const res = await patch({ memoryType: 'labour', summary: 'Tom — 8 hours', happenedAt: 'not-a-date' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('INVALID_FIELD')
+  })
+
+  it('edits day, person, hours, and task together on patch', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await patch({
+      memoryType: 'labour', summary: 'Kurt — 6 hours · roof',
+      happenedAt: '2026-07-03T11:00:00.000Z', labourPerson: 'Kurt', labourHours: '6', labourTask: 'roof',
+    })
+    expect(res.statusCode).toBe(200)
+    const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
+    expect(call.data).toMatchObject({ labourPerson: 'Kurt', labourHours: '6', labourTask: 'roof' })
+    expect(call.data.happenedAt?.toISOString()).toBe('2026-07-03T11:00:00.000Z')
+  })
+})
