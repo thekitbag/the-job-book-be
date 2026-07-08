@@ -19,6 +19,7 @@ model User {
   jobs                Job[]
   reviewDecisions     ReviewDecision[]
   passwordResetTokens PasswordResetToken[]
+  uploadedPhotos      JobPhoto[]
 
   @@map("users")
 }
@@ -60,6 +61,7 @@ model Job {
   memoryItems      MemoryItem[]
   queueItems       QueueItem[]
   budgetCategories JobBudgetCategory[]
+  photos           JobPhoto[]
 
   @@map("jobs")
 }
@@ -87,6 +89,7 @@ model RawNote {
   audioObject    AudioObject?
   transcripts    Transcript[]
   candidateFacts CandidateFact[]
+  linkedPhotos   JobPhoto[]
 
   @@unique([jobId, clientNoteId])
   @@map("raw_notes")
@@ -295,6 +298,7 @@ model MemoryItem {
   reviewDecision ReviewDecision     @relation(fields: [reviewDecisionId], references: [id])
   sourceFact     CandidateFact?     @relation(fields: [sourceCandidateFactId], references: [id])
   budgetCategory JobBudgetCategory? @relation(fields: [budgetCategoryId], references: [id])
+  linkedPhotos   JobPhoto[]
 
   @@index([jobId, budgetCategoryId])
   @@map("memory_items")
@@ -316,6 +320,32 @@ model JobBudgetCategory {
 
   @@index([jobId, sortOrder])
   @@map("job_budget_categories")
+}
+
+model JobPhoto {
+  id                 String   @id @default(uuid())
+  jobId              String
+  uploadedByUserId   String
+  descriptor         String?
+  storageKey         String   @unique
+  bucket             String
+  mimeType           String
+  sizeBytes          Int
+  linkedNoteId       String?
+  linkedMemoryItemId String?
+  uploadedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  job              Job         @relation(fields: [jobId], references: [id])
+  uploadedBy       User        @relation(fields: [uploadedByUserId], references: [id])
+  linkedNote       RawNote?    @relation(fields: [linkedNoteId], references: [id])
+  linkedMemoryItem MemoryItem? @relation(fields: [linkedMemoryItemId], references: [id])
+
+  @@index([jobId, uploadedAt])
+  @@index([jobId, linkedNoteId])
+  @@index([jobId, linkedMemoryItemId])
+  @@map("job_photos")
 }
 
 model QueueItem {

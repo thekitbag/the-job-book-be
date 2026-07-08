@@ -20,6 +20,7 @@ import inspectionRoutes from './routes/inspection.js'
 import memoryViewRoutes from './routes/memory-view.js'
 import memoryItemsRoutes from './routes/memory-items.js'
 import budgetRoutes from './routes/budget.js'
+import photosRoutes from './routes/photos.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
 
 export interface AppOptions {
@@ -76,11 +77,17 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(memoryViewRoutes)
   fastify.register(memoryItemsRoutes)
   fastify.register(budgetRoutes)
+  fastify.register(photosRoutes, { storage })
 
   // @fastify/multipart v9 calls req.raw.destroy(err) when the file size limit is exceeded,
   // which bypasses route try/catch and lands here. Remap to our stable error code.
   fastify.setErrorHandler((error: Error & { code?: string; statusCode?: number }, request, reply) => {
     if (error.code === 'FST_REQ_FILE_TOO_LARGE') {
+      // Photo uploads share the multipart plugin; keep the photo error code
+      // stable when a photo blows past the global multipart limit too.
+      if (request.url.includes('/photos')) {
+        return reply.code(413).send({ code: 'PHOTO_TOO_LARGE', message: 'Photo exceeds max size' })
+      }
       return reply.code(413).send({ code: 'AUDIO_TOO_LARGE', message: 'Audio exceeds max size' })
     }
     request.log.error({ err: error }, error.message)
