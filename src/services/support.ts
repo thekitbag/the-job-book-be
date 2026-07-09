@@ -193,6 +193,13 @@ export async function listSupportUserJobs(adminUserId: string, targetUserId: str
   }
 }
 
+// Photos rendered in support mode must be loadable by the internal user, so
+// support responses point imageUrl at the support-authenticated file route
+// (the normal user route would 403 for the founder).
+function toSupportPhoto<T extends { id: string }>(jobId: string, photo: T): T {
+  return { ...photo, imageUrl: `/api/internal/support/jobs/${jobId}/photos/${photo.id}/file` }
+}
+
 // ── Job inspection ────────────────────────────────────────────────────────────
 
 // The active internal inspection surface: the existing inspection assembly run
@@ -214,7 +221,7 @@ export async function getSupportJobInspection(adminUserId: string, jobId: string
     listJobPhotos(jobId, owner.id),
   ])
 
-  return { owner, ...inspection, photos: photos.photos }
+  return { owner, ...inspection, photos: photos.photos.map((p) => toSupportPhoto(jobId, p)) }
 }
 
 // ── Read-only view-as-user workspace reads ────────────────────────────────────
@@ -246,7 +253,8 @@ export async function getSupportReviewQueue(adminUserId: string, jobId: string) 
 
 export async function getSupportJobPhotos(adminUserId: string, jobId: string) {
   const job = await resolveAndAudit(adminUserId, jobId, 'photos')
-  return listJobPhotos(jobId, job.ownerUserId)
+  const result = await listJobPhotos(jobId, job.ownerUserId)
+  return { ...result, photos: result.photos.map((p) => toSupportPhoto(jobId, p)) }
 }
 
 export async function getSupportJobPhotoFile(

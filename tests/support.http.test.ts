@@ -277,6 +277,27 @@ describe('support view-as read endpoints', () => {
     expect(file.rawPayload.equals(PNG_BYTES)).toBe(true)
   })
 
+  it('support photo responses return the support-authenticated imageUrl, and that URL streams bytes for the internal user', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobPhoto.findMany as any).mockResolvedValue([makePhotoRow()])
+    vi.mocked(prisma.jobPhoto.findFirst as any).mockResolvedValue(makePhotoRow())
+    await storage.store(`jobs/${JOB_ID}/photos/${PHOTO_ID}`, PNG_BYTES, 'image/png')
+
+    const supportUrl = `/api/internal/support/jobs/${JOB_ID}/photos/${PHOTO_ID}/file`
+
+    const list = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/photos`, headers: asAdmin })
+    expect(list.json().photos[0].imageUrl).toBe(supportUrl)
+
+    // inspection photos carry the same support imageUrl
+    const inspection = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/inspection`, headers: asAdmin })
+    expect(inspection.json().photos[0].imageUrl).toBe(supportUrl)
+
+    // the returned URL is directly loadable by the internal user
+    const file = await app.inject({ method: 'GET', url: list.json().photos[0].imageUrl, headers: asAdmin })
+    expect(file.statusCode).toBe(200)
+    expect(file.rawPayload.equals(PNG_BYTES)).toBe(true)
+  })
+
   it('404s when the photo does not belong to the job', async () => {
     const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/photos/foreign/file`, headers: asAdmin })
     expect(res.statusCode).toBe(404)
