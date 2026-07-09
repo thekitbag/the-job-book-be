@@ -20,6 +20,7 @@ model User {
   reviewDecisions     ReviewDecision[]
   passwordResetTokens PasswordResetToken[]
   uploadedPhotos      JobPhoto[]
+  supportAuditEvents  SupportAuditEvent[]
 
   @@map("users")
 }
@@ -346,6 +347,22 @@ model JobPhoto {
   @@index([jobId, linkedNoteId])
   @@index([jobId, linkedMemoryItemId])
   @@map("job_photos")
+}
+
+model SupportAuditEvent {
+  id           String   @id @default(uuid())
+  adminUserId  String
+  targetUserId String?
+  targetJobId  String?
+  action       String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  adminUser User @relation(fields: [adminUserId], references: [id])
+
+  @@index([adminUserId, createdAt])
+  @@index([targetJobId, createdAt])
+  @@map("support_audit_events")
 }
 
 model QueueItem {
