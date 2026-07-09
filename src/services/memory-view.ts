@@ -45,7 +45,7 @@ const SUMMARY_SECTION_LABELS: Record<string, string> = {
   leftovers: 'Leftovers',
 }
 
-interface SummaryRow {
+export interface SummaryRow {
   materialName: string | null
   quantity: string | null
   unit: string | null
@@ -127,7 +127,7 @@ interface ExcludedSpendRow {
   reason: SpendExclusionReason
 }
 
-interface OrderedMaterialsCostSummary {
+export interface OrderedMaterialsCostSummary {
   knownSpendAmount: string | null
   knownSpendCurrency: string | null
   knownSpendLabel: string | null
