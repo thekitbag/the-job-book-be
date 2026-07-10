@@ -870,3 +870,90 @@ describe('labour/budget invariants — historical Labour-category spend', () => 
     expect(new Set(ids).size).toBe(ids.length)
   })
 })
+
+// ── Labour budget anchor: category lifecycle drives budgetSummary.labour ──────
+//
+// The frontend sets a Labour budget by creating/updating a category named
+// "Labour" through the existing budget-category APIs. The system labour group
+// must pick that up (and let it go on archive) without labour rows changing.
+
+describe('labour budget anchor — Labour category lifecycle in budgetSummary.labour', () => {
+  const headers = { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }
+  const CAT_LABOUR_ID = 'cat-labour-anchor'
+
+  function trustedLabourRow() {
+    return makeMemory({
+      id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom did 8 hours at £35/hr',
+      labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP',
+    })
+  }
+
+  async function summary() {
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    expect(res.statusCode).toBe(200)
+    return res.json<Record<string, any>>()
+  }
+
+  it('with labour rows and no Labour category, budget fields are null but rows appear', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    const body = await summary()
+    expect(body.labour.rows).toHaveLength(1)
+    expect(body.labour.budgetCategory).toBeNull()
+    expect(body.labour.budgetAmount).toBeNull()
+    expect(body.labour.remainingAmount).toBeNull()
+  })
+
+  it('creating a category named "Labour" via the API then makes budgetSummary.labour.budgetCategory appear', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+
+    // create through the existing budget-category API
+    vi.mocked(prisma.jobBudgetCategory.create as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ data }: any) => ({ ...makeCategory(), id: CAT_LABOUR_ID, ...data }),
+    )
+    const created = await app.inject({
+      method: 'POST', url: `/api/jobs/${JOB_ID}/budget-categories`, headers,
+      payload: { name: 'Labour', budgetAmount: '1500' },
+    })
+    expect(created.statusCode).toBe(201)
+    expect(created.json<any>().name).toBe('Labour')
+
+    // budget-summary now sees the active category
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: CAT_LABOUR_ID, name: 'Labour', budgetAmount: '1500', budgetCurrency: 'GBP' }),
+    ])
+    const body = await summary()
+    expect(body.labour.budgetCategory).toMatchObject({ id: CAT_LABOUR_ID, name: 'Labour' })
+    expect(body.labour.budgetAmount).toBe('1500')
+    expect(body.labour.remainingAmount).toBe('1220') // 1500 − 280
+    expect(body.labour.rows).toHaveLength(1)
+  })
+
+  it('updating the Labour category budget updates labour remaining/over-budget', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: CAT_LABOUR_ID, name: 'Labour', budgetAmount: '200', budgetCurrency: 'GBP' }),
+    ])
+    const body = await summary()
+    expect(body.labour.budgetAmount).toBe('200')
+    expect(body.labour.overBudget).toBe(true)
+    expect(body.labour.remainingLabel).toBe('£80 over budget')
+    expect(body.labour.rows).toHaveLength(1) // rows unaffected by budget change
+  })
+
+  it('archiving the Labour category removes budget context but keeps labour rows and spend', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    // archived categories are excluded from the active list the summary reads
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const body = await summary()
+    expect(body.labour.budgetCategory).toBeNull()
+    expect(body.labour.budgetAmount).toBeNull()
+    expect(body.labour.rows).toHaveLength(1)
+    expect(body.labour.knownSpendAmount).toBe('280')
+    expect(body.totals.knownSpendAmount).toBe('280')
+  })
+})
