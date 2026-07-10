@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify'
-import { getCurrentJob, listJobs, getJob, createJob } from '../services/jobs.js'
+import { getCurrentJob, listJobs, getJob, createJob, patchJob } from '../services/jobs.js'
 import { ErrorCode } from '../types/errors.js'
 
 const jobsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -31,6 +31,18 @@ const jobsRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body as Record<string, unknown> | null | undefined
       const job = await createJob(request.userId, body?.title, body?.jobType)
       return reply.code(201).send(job)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  // PATCH /api/jobs/:jobId — owner-scoped title edit (only editable field in
+  // this slice)
+  fastify.patch<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
+    try {
+      const body = (request.body ?? {}) as { title?: unknown }
+      const job = await patchJob(request.params.jobId, request.userId, { title: body.title })
+      return reply.send(job)
     } catch (err: unknown) {
       return handleServiceError(err, reply)
     }
