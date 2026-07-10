@@ -17,6 +17,7 @@ vi.mock('../src/db/client.js', () => ({
       findMany: vi.fn(),
       findUnique: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
     },
     rawNote: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     audioObject: { create: vi.fn() },
@@ -318,5 +319,76 @@ describe('POST /api/jobs', () => {
 
     expect(res.statusCode).toBe(400)
     expect(res.json<{ code: string }>().code).toBe('INVALID_FIELD')
+  })
+})
+
+describe('PATCH /api/jobs/:jobId — title edit', () => {
+  const headers = { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' }
+
+  beforeEach(async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
+    vi.mocked((prisma.job as any).update).mockImplementation(async ({ data }: any) => ({
+      ...makeJob(), ...data, updatedAt: new Date(),
+    }))
+  })
+
+  it('updates the title and returns the normalized job shape', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'Sandbanks garden room' } })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<any>()
+    expect(body).toMatchObject({ id: JOB_ID, title: 'Sandbanks garden room', jobType: 'garden_room', status: 'active' })
+    expect(body).not.toHaveProperty('ownerUserId')
+  })
+
+  it('trims whitespace from the title', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: '  Sandbanks job  ' } })
+    expect(res.statusCode).toBe(200)
+    expect(vi.mocked((prisma.job as any).update).mock.calls[0][0].data.title).toBe('Sandbanks job')
+  })
+
+  it('rejects a blank title with 400', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: '   ' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('INVALID_FIELD')
+  })
+
+  it('rejects a title over 80 characters with 400', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'x'.repeat(81) } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('INVALID_FIELD')
+  })
+
+  it('rejects a body with no editable field with 400', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: {} })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('MISSING_FIELD')
+  })
+
+  it('does not allow jobType/status changes in this slice', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'New title', jobType: 'extension', status: 'archived' } })
+    expect(res.statusCode).toBe(200)
+    const data = vi.mocked((prisma.job as any).update).mock.calls[0][0].data
+    expect(data).toEqual({ title: 'New title' })
+  })
+
+  it('rejects a non-owner with 403 and an unknown job with 404', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob({ ownerUserId: OTHER_USER_ID }))
+    const forbidden = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'Hijack' } })
+    expect(forbidden.statusCode).toBe(403)
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(null)
+    const missing = await app.inject({ method: 'PATCH', url: '/api/jobs/nope', headers, payload: { title: 'Hijack' } })
+    expect(missing.statusCode).toBe(404)
+    expect(vi.mocked((prisma.job as any).update)).not.toHaveBeenCalled()
+  })
+
+  it('the updated title flows through GET /api/jobs/:jobId', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob({ title: 'Sandbanks garden room' }))
+    const res = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}`, headers: { 'x-pilot-user-id': USER_ID } })
+    expect(res.json<any>().title).toBe('Sandbanks garden room')
   })
 })

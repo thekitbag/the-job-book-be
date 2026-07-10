@@ -774,3 +774,186 @@ describe('GET /api/jobs/:jobId/budget-summary — labour group', () => {
     expect(res.json<Record<string, any>>().labour.rows).toHaveLength(0)
   })
 })
+
+// ── Labour entry point / budget clarity: historical Labour-category invariants ─
+//
+// Ordinary non-labour spend assigned to a user-created category named
+// "labour" must stay ordinary spend: visible, counted once, never silently
+// converted to labour, and never absorbed into the system labour group.
+
+describe('labour/budget invariants — historical Labour-category spend', () => {
+  const headers = { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }
+  const CAT_LABOUR_ID = 'cat-named-labour'
+
+  function labourNamedCategory(overrides?: object) {
+    return makeCategory({ id: CAT_LABOUR_ID, name: 'Labour', budgetAmount: '1000', budgetCurrency: 'GBP', ...overrides })
+  }
+
+  function materialInLabourCategory(overrides?: object) {
+    return makeMemory({
+      id: 'mem-historic', memoryType: 'ORDERED_MATERIAL', materialName: 'scaffold hire',
+      totalCostAmount: '400', costCurrency: 'GBP', budgetCategoryId: CAT_LABOUR_ID, ...overrides,
+    })
+  }
+
+  function trustedLabour(overrides?: object) {
+    return makeMemory({
+      id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom did 8 hours at £35/hr',
+      labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', ...overrides,
+    })
+  }
+
+  it('keeps non-labour spend in a Labour category as ordinary spend, counted once, not converted', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([labourNamedCategory()])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([materialInLabourCategory()])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<Record<string, any>>()
+
+    // still ordinary material spend in its category — not converted to labour
+    const labourCat = body.categories.find((c: any) => c.category.id === CAT_LABOUR_ID)
+    expect(labourCat.rows).toHaveLength(1)
+    expect(labourCat.rows[0]).toMatchObject({ memoryItemId: 'mem-historic', memoryType: 'ordered_material' })
+
+    // not absorbed into the system labour group
+    expect(body.labour.rows).toHaveLength(0)
+    expect(body.labour.knownSpendAmount).toBeNull()
+    // the labour group still aligns to the category for budget context
+    expect(body.labour.budgetCategory).toMatchObject({ id: CAT_LABOUR_ID })
+
+    // counted exactly once in job totals
+    expect(body.totals.knownSpendAmount).toBe('400')
+  })
+
+  it('counts trusted labour and historical Labour-category material once each in job totals', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([labourNamedCategory()])
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      materialInLabourCategory(),
+      trustedLabour(),
+    ])
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    const body = res.json<Record<string, any>>()
+
+    // labour group: only the proper labour row
+    expect(body.labour.rows.map((r: any) => r.memoryItemId)).toEqual(['mem-labour'])
+    expect(body.labour.knownSpendAmount).toBe('280')
+    expect(body.labour.budgetAmount).toBe('1000')
+    expect(body.labour.remainingAmount).toBe('720')
+
+    // job totals: 400 material + 280 labour, no row twice
+    expect(body.totals.knownSpendAmount).toBe('680')
+
+    // no memoryItemId appears in more than one of: labour group vs the same
+    // row's ordinary category placement duplicating a labour row
+    const categoryRowIds = body.categories.flatMap((c: any) => c.rows.map((r: any) => r.memoryItemId))
+    const uncatRowIds = body.uncategorized.rows.map((r: any) => r.memoryItemId)
+    const ordinaryIds = [...categoryRowIds, ...uncatRowIds]
+    expect(new Set(ordinaryIds).size).toBe(ordinaryIds.length)
+  })
+
+  it('memory-view costSummary counts trusted labour once and keeps material spend material-only', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...materialInLabourCategory(), sourceFact: null },
+      { ...trustedLabour(), sourceFact: null },
+    ])
+    vi.mocked(prisma.candidateFact.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const res = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/memory-view`, headers })
+    expect(res.statusCode).toBe(200)
+    const cs = res.json<Record<string, any>>().costSummary
+    expect(cs.orderedMaterials.knownSpendAmount).toBe('400') // material-only
+    expect(cs.labour.knownSpendAmount).toBe('280')
+    expect(cs.totalKnownCost.knownSpendAmount).toBe('680') // each once
+    const ids = cs.totalKnownCost.includedMemoryItemIds
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+// ── Labour budget anchor: category lifecycle drives budgetSummary.labour ──────
+//
+// The frontend sets a Labour budget by creating/updating a category named
+// "Labour" through the existing budget-category APIs. The system labour group
+// must pick that up (and let it go on archive) without labour rows changing.
+
+describe('labour budget anchor — Labour category lifecycle in budgetSummary.labour', () => {
+  const headers = { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }
+  const CAT_LABOUR_ID = 'cat-labour-anchor'
+
+  function trustedLabourRow() {
+    return makeMemory({
+      id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom did 8 hours at £35/hr',
+      labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP',
+    })
+  }
+
+  async function summary() {
+    const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
+    expect(res.statusCode).toBe(200)
+    return res.json<Record<string, any>>()
+  }
+
+  it('with labour rows and no Labour category, budget fields are null but rows appear', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    const body = await summary()
+    expect(body.labour.rows).toHaveLength(1)
+    expect(body.labour.budgetCategory).toBeNull()
+    expect(body.labour.budgetAmount).toBeNull()
+    expect(body.labour.remainingAmount).toBeNull()
+  })
+
+  it('creating a category named "Labour" via the API then makes budgetSummary.labour.budgetCategory appear', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+
+    // create through the existing budget-category API
+    vi.mocked(prisma.jobBudgetCategory.create as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ data }: any) => ({ ...makeCategory(), id: CAT_LABOUR_ID, ...data }),
+    )
+    const created = await app.inject({
+      method: 'POST', url: `/api/jobs/${JOB_ID}/budget-categories`, headers,
+      payload: { name: 'Labour', budgetAmount: '1500' },
+    })
+    expect(created.statusCode).toBe(201)
+    expect(created.json<any>().name).toBe('Labour')
+
+    // budget-summary now sees the active category
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: CAT_LABOUR_ID, name: 'Labour', budgetAmount: '1500', budgetCurrency: 'GBP' }),
+    ])
+    const body = await summary()
+    expect(body.labour.budgetCategory).toMatchObject({ id: CAT_LABOUR_ID, name: 'Labour' })
+    expect(body.labour.budgetAmount).toBe('1500')
+    expect(body.labour.remainingAmount).toBe('1220') // 1500 − 280
+    expect(body.labour.rows).toHaveLength(1)
+  })
+
+  it('updating the Labour category budget updates labour remaining/over-budget', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeCategory({ id: CAT_LABOUR_ID, name: 'Labour', budgetAmount: '200', budgetCurrency: 'GBP' }),
+    ])
+    const body = await summary()
+    expect(body.labour.budgetAmount).toBe('200')
+    expect(body.labour.overBudget).toBe(true)
+    expect(body.labour.remainingLabel).toBe('£80 over budget')
+    expect(body.labour.rows).toHaveLength(1) // rows unaffected by budget change
+  })
+
+  it('archiving the Labour category removes budget context but keeps labour rows and spend', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([trustedLabourRow()])
+    // archived categories are excluded from the active list the summary reads
+    vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const body = await summary()
+    expect(body.labour.budgetCategory).toBeNull()
+    expect(body.labour.budgetAmount).toBeNull()
+    expect(body.labour.rows).toHaveLength(1)
+    expect(body.labour.knownSpendAmount).toBe('280')
+    expect(body.totals.knownSpendAmount).toBe('280')
+  })
+})

@@ -65,10 +65,12 @@ export async function getJob(jobId: string, userId: string) {
   return normalizeJob(job)
 }
 
+export const MAX_JOB_TITLE_LENGTH = 80
+
 export async function createJob(userId: string, title: unknown, jobType: unknown) {
   const trimmedTitle = typeof title === 'string' ? title.trim() : ''
   if (!trimmedTitle) throw { code: ErrorCode.MISSING_FIELD, message: 'title is required' }
-  if (trimmedTitle.length > 80) throw { code: ErrorCode.INVALID_FIELD, message: 'title must be 80 characters or fewer' }
+  if (trimmedTitle.length > MAX_JOB_TITLE_LENGTH) throw { code: ErrorCode.INVALID_FIELD, message: 'title must be 80 characters or fewer' }
 
   const resolvedJobType = jobType === undefined || jobType === null ? 'other' : jobType
   if (typeof resolvedJobType !== 'string' || !ALLOWED_JOB_TYPES.has(resolvedJobType)) {
@@ -85,4 +87,33 @@ export async function createJob(userId: string, title: unknown, jobType: unknown
   })
 
   return normalizeJob(job)
+}
+
+// Owner-scoped job edit. Title is the only editable field in this slice — no
+// type/status/archive changes; unknown body fields are ignored, never applied.
+export async function patchJob(jobId: string, userId: string, patch: { title?: unknown }) {
+  if (patch.title === undefined) {
+    throw { code: ErrorCode.MISSING_FIELD, message: 'title is required' }
+  }
+  const trimmedTitle = typeof patch.title === 'string' ? patch.title.trim() : ''
+  if (!trimmedTitle) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'title must be a non-empty string' }
+  }
+  if (trimmedTitle.length > MAX_JOB_TITLE_LENGTH) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'title must be 80 characters or fewer' }
+  }
+
+  const existing = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { ownerUserId: true, ...JOB_SELECT },
+  })
+  if (!existing) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
+  if (existing.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+
+  const updated = await prisma.job.update({
+    where: { id: jobId },
+    data: { title: trimmedTitle },
+    select: JOB_SELECT,
+  })
+  return normalizeJob(updated)
 }
