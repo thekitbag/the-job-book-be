@@ -36,12 +36,15 @@ const jobsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   })
 
-  // PATCH /api/jobs/:jobId — owner-scoped title edit (only editable field in
-  // this slice)
+  // PATCH /api/jobs/:jobId — owner-scoped edit of title and lightweight
+  // status (archived is not settable here)
   fastify.patch<{ Params: { jobId: string } }>('/api/jobs/:jobId', async (request, reply) => {
     try {
-      const body = (request.body ?? {}) as { title?: unknown }
-      const job = await patchJob(request.params.jobId, request.userId, { title: body.title })
+      const body = (request.body ?? {}) as { title?: unknown; status?: unknown }
+      const job = await patchJob(request.params.jobId, request.userId, {
+        title: body.title,
+        status: body.status,
+      })
       return reply.send(job)
     } catch (err: unknown) {
       return handleServiceError(err, reply)

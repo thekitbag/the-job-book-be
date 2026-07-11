@@ -69,6 +69,7 @@ model Job {
 
 enum JobStatus {
   ACTIVE
+  PAUSED
   COMPLETED
   ARCHIVED
 }
