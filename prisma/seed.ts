@@ -25,7 +25,7 @@ async function main() {
       ownerUserId: mike.id,
       title: 'Garden Room Build',
       jobType: 'construction',
-      status: 'ACTIVE',
+      status: 'STARTED',
       roughLocationOrLabel: 'Back garden, Oakfield Road',
     },
   })

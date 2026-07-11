@@ -35,7 +35,7 @@ function makeJob(overrides?: object) {
     ownerUserId: USER_ID,
     title: 'Poole garden room',
     jobType: 'garden_room',
-    status: 'ACTIVE',
+    status: 'STARTED',
     roughLocationOrLabel: null,
     createdAt: new Date('2026-06-10T10:00:00.000Z'),
     updatedAt: new Date('2026-06-10T10:00:00.000Z'),
@@ -71,7 +71,7 @@ beforeEach(async () => {
 })
 
 describe('GET /api/jobs', () => {
-  it('returns only the authenticated users active jobs', async () => {
+  it('returns the authenticated users non-archived jobs', async () => {
     const { prisma } = await import('../src/db/client.js')
     const jobs = [makeJob(), makeJob({ id: 'jobs-job-2', title: 'Bournemouth extension' })]
     vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(jobs)
@@ -86,15 +86,17 @@ describe('GET /api/jobs', () => {
     const body = res.json<unknown[]>()
     expect(body).toHaveLength(2)
     expect(vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { ownerUserId: USER_ID, status: 'ACTIVE' } })
+      expect.objectContaining({
+        where: { ownerUserId: USER_ID, status: { in: ['PLANNING', 'STARTED', 'FINISHED'] } },
+      })
     )
   })
 
-  it('excludes archived and completed jobs from the list', async () => {
+  it('excludes archived jobs from the list at the query level', async () => {
     const { prisma } = await import('../src/db/client.js')
-    // Prisma applies the filter — mock returns only what would pass the ACTIVE filter
+    // Prisma applies the filter — mock returns only what would pass it
     vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeJob({ status: 'ACTIVE' }),
+      makeJob({ status: 'STARTED' }),
     ])
 
     const res = await app.inject({
@@ -105,12 +107,11 @@ describe('GET /api/jobs', () => {
 
     expect(res.statusCode).toBe(200)
     const body = res.json<Array<{ status: string }>>()
-    // Confirm the filter was applied at the query level
-    expect(vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ status: 'ACTIVE' }) })
-    )
+    // The visible-status filter never includes ARCHIVED
+    const where = vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0].where
+    expect(where.status.in).toEqual(['PLANNING', 'STARTED', 'FINISHED'])
     expect(body).toHaveLength(1)
-    expect(body[0].status).toBe('active')
+    expect(body[0].status).toBe('started')
   })
 
   it('returns empty list when user has no active jobs', async () => {
@@ -130,7 +131,7 @@ describe('GET /api/jobs', () => {
   it('returns normalized lowercase status in list response', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeJob({ status: 'ACTIVE' }),
+      makeJob({ status: 'STARTED' }),
     ])
 
     const res = await app.inject({
@@ -141,14 +142,14 @@ describe('GET /api/jobs', () => {
 
     expect(res.statusCode).toBe(200)
     const body = res.json<Array<{ status: string }>>()
-    expect(body[0].status).toBe('active')
+    expect(body[0].status).toBe('started')
   })
 })
 
 describe('GET /api/jobs/current', () => {
   it('returns normalized most recent active job', async () => {
     const { prisma } = await import('../src/db/client.js')
-    vi.mocked(prisma.job.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(makeJob())
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([makeJob()])
 
     const res = await app.inject({
       method: 'GET',
@@ -159,16 +160,18 @@ describe('GET /api/jobs/current', () => {
     expect(res.statusCode).toBe(200)
     const body = res.json<{ id: string; status: string; jobType: string }>()
     expect(body.id).toBe(JOB_ID)
-    expect(body.status).toBe('active')
+    expect(body.status).toBe('started')
     expect(body.jobType).toBe('garden_room')
-    expect(vi.mocked(prisma.job.findFirst as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { ownerUserId: USER_ID, status: 'ACTIVE' } })
+    expect(vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { ownerUserId: USER_ID, status: { in: ['PLANNING', 'STARTED', 'FINISHED'] } },
+      })
     )
   })
 
-  it('returns 404 when no active job exists', async () => {
+  it('returns 404 when no non-archived job exists', async () => {
     const { prisma } = await import('../src/db/client.js')
-    vi.mocked(prisma.job.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
     const res = await app.inject({
       method: 'GET',
@@ -195,7 +198,7 @@ describe('GET /api/jobs/:jobId', () => {
     expect(res.statusCode).toBe(200)
     const body = res.json<{ status: string; id: string }>()
     expect(body.id).toBe(JOB_ID)
-    expect(body.status).toBe('active')
+    expect(body.status).toBe('started')
   })
 
   it('returns 403 for cross-user access', async () => {
@@ -216,9 +219,10 @@ describe('GET /api/jobs/:jobId', () => {
 })
 
 describe('POST /api/jobs', () => {
-  it('creates a job with title and jobType', async () => {
+  it('creates a job with title and jobType, defaulting status to planning', async () => {
     const { prisma } = await import('../src/db/client.js')
-    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room' })
+    // status is the DB default (PLANNING) — the service never sets it on create
+    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room', status: 'PLANNING' })
     vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(created)
 
     const res = await app.inject({
@@ -231,8 +235,11 @@ describe('POST /api/jobs', () => {
     expect(res.statusCode).toBe(201)
     const body = res.json<{ id: string; status: string; jobType: string }>()
     expect(body.id).toBe(JOB_ID)
-    expect(body.status).toBe('active')
+    expect(body.status).toBe('planning')
     expect(body.jobType).toBe('garden_room')
+    // create data must not force a status — the schema default owns it
+    const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
+    expect('status' in data).toBe(false)
   })
 
   it('defaults missing jobType to other', async () => {
@@ -337,7 +344,7 @@ describe('PATCH /api/jobs/:jobId — title edit', () => {
     const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'Sandbanks garden room' } })
     expect(res.statusCode).toBe(200)
     const body = res.json<any>()
-    expect(body).toMatchObject({ id: JOB_ID, title: 'Sandbanks garden room', jobType: 'garden_room', status: 'active' })
+    expect(body).toMatchObject({ id: JOB_ID, title: 'Sandbanks garden room', jobType: 'garden_room', status: 'started' })
     expect(body).not.toHaveProperty('ownerUserId')
   })
 
@@ -366,9 +373,9 @@ describe('PATCH /api/jobs/:jobId — title edit', () => {
     expect(res.json<any>().code).toBe('MISSING_FIELD')
   })
 
-  it('does not allow jobType/status changes in this slice', async () => {
+  it('does not allow jobType changes and ignores unknown fields', async () => {
     const { prisma } = await import('../src/db/client.js')
-    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'New title', jobType: 'extension', status: 'archived' } })
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: 'New title', jobType: 'extension', nonsense: true } })
     expect(res.statusCode).toBe(200)
     const data = vi.mocked((prisma.job as any).update).mock.calls[0][0].data
     expect(data).toEqual({ title: 'New title' })
@@ -390,5 +397,133 @@ describe('PATCH /api/jobs/:jobId — title edit', () => {
     vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob({ title: 'Sandbanks garden room' }))
     const res = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}`, headers: { 'x-pilot-user-id': USER_ID } })
     expect(res.json<any>().title).toBe('Sandbanks garden room')
+  })
+})
+
+describe('PATCH /api/jobs/:jobId — status edit', () => {
+  const headers = { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' }
+
+  beforeEach(async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
+    vi.mocked((prisma.job as any).update).mockImplementation(async ({ data }: any) => ({
+      ...makeJob(), ...data, updatedAt: new Date(),
+    }))
+  })
+
+  it.each(['planning', 'started', 'finished', 'archived'])('updates status to %s and returns it lower-case', async (status) => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status } })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<any>().status).toBe(status)
+    const data = vi.mocked((prisma.job as any).update).mock.calls.at(-1)[0].data
+    expect(data).toEqual({ status: status.toUpperCase() })
+  })
+
+  it('updates title and status together', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { title: '  Winter job  ', status: 'planning' } })
+    expect(res.statusCode).toBe(200)
+    const body = res.json<any>()
+    expect(body.title).toBe('Winter job')
+    expect(body.status).toBe('planning')
+    expect(vi.mocked((prisma.job as any).update).mock.calls[0][0].data).toEqual({ title: 'Winter job', status: 'PLANNING' })
+  })
+
+  it('rejects an invalid status with 400 INVALID_FIELD', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status: 'someday' } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('INVALID_FIELD')
+  })
+
+  it('accepts archived: it is a status change, not a delete', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status: 'archived' } })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<any>().status).toBe('archived')
+    // only a status update — no delete call exists on this route
+    expect(vi.mocked((prisma.job as any).update).mock.calls[0][0].data).toEqual({ status: 'ARCHIVED' })
+  })
+
+  it('rejects legacy/unknown statuses (active, paused, completed, on_hold)', async () => {
+    for (const status of ['active', 'paused', 'completed', 'on_hold']) {
+      const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status } })
+      expect(res.statusCode, status).toBe(400)
+      expect(res.json<any>().code).toBe('INVALID_FIELD')
+    }
+  })
+
+  it('still rejects a body with no editable field', async () => {
+    const res = await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: {} })
+    expect(res.statusCode).toBe(400)
+    expect(res.json<any>().code).toBe('MISSING_FIELD')
+  })
+
+  it('status-only patch leaves the title untouched', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status: 'planning' } })
+    const data = vi.mocked((prisma.job as any).update).mock.calls[0][0].data
+    expect('title' in data).toBe(false)
+  })
+
+  it('non-owner cannot update status; unknown job is 404', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob({ ownerUserId: OTHER_USER_ID }))
+    expect((await app.inject({ method: 'PATCH', url: `/api/jobs/${JOB_ID}`, headers, payload: { status: 'planning' } })).statusCode).toBe(403)
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue(null)
+    expect((await app.inject({ method: 'PATCH', url: '/api/jobs/nope', headers, payload: { status: 'planning' } })).statusCode).toBe(404)
+  })
+})
+
+describe('job visibility after status changes', () => {
+  const headers = { 'x-pilot-user-id': USER_ID }
+
+  it('GET /api/jobs includes planning, started, and finished jobs but not archived', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as any).mockResolvedValue([
+      makeJob({ id: 'j-planning', status: 'PLANNING' }),
+      makeJob({ id: 'j-started', status: 'STARTED' }),
+      makeJob({ id: 'j-done', status: 'FINISHED' }),
+    ])
+    const res = await app.inject({ method: 'GET', url: '/api/jobs', headers })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<any>().map((j: any) => j.status)).toEqual(['planning', 'started', 'finished'])
+    // the query itself must include the three visible statuses and exclude ARCHIVED
+    const where = vi.mocked(prisma.job.findMany as any).mock.calls[0][0].where
+    expect(where.status).toEqual({ in: ['PLANNING', 'STARTED', 'FINISHED'] })
+  })
+
+  it('GET /api/jobs/current prefers the most recent STARTED job', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as any).mockResolvedValue([
+      makeJob({ id: 'j-planning', status: 'PLANNING', updatedAt: new Date('2026-07-11T10:00:00.000Z') }),
+      makeJob({ id: 'j-started', status: 'STARTED', updatedAt: new Date('2026-07-01T10:00:00.000Z') }),
+    ])
+    const res = await app.inject({ method: 'GET', url: '/api/jobs/current', headers })
+    expect(res.statusCode).toBe(200)
+    expect(res.json<any>().id).toBe('j-started')
+  })
+
+  it('GET /api/jobs/current falls back to planning, then finished', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as any).mockResolvedValue([
+      makeJob({ id: 'j-done', status: 'FINISHED', updatedAt: new Date('2026-07-11T10:00:00.000Z') }),
+      makeJob({ id: 'j-planning', status: 'PLANNING', updatedAt: new Date('2026-07-01T10:00:00.000Z') }),
+    ])
+    let res = await app.inject({ method: 'GET', url: '/api/jobs/current', headers })
+    expect(res.json<any>().id).toBe('j-planning')
+
+    vi.mocked(prisma.job.findMany as any).mockResolvedValue([
+      makeJob({ id: 'j-done', status: 'FINISHED' }),
+    ])
+    res = await app.inject({ method: 'GET', url: '/api/jobs/current', headers })
+    expect(res.json<any>().id).toBe('j-done')
+  })
+
+  it('GET /api/jobs/current returns 404 only when no non-archived jobs exist', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as any).mockResolvedValue([])
+    const res = await app.inject({ method: 'GET', url: '/api/jobs/current', headers })
+    expect(res.statusCode).toBe(404)
   })
 })
