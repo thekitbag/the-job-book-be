@@ -49,7 +49,7 @@ model Job {
   ownerUserId          String
   title                String
   jobType              String
-  status               JobStatus @default(STARTED)
+  status               JobStatus @default(PLANNING)
   roughLocationOrLabel String?
   notes                String?
   createdAt            DateTime  @default(now())

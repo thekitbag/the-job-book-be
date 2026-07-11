@@ -219,9 +219,10 @@ describe('GET /api/jobs/:jobId', () => {
 })
 
 describe('POST /api/jobs', () => {
-  it('creates a job with title and jobType', async () => {
+  it('creates a job with title and jobType, defaulting status to planning', async () => {
     const { prisma } = await import('../src/db/client.js')
-    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room' })
+    // status is the DB default (PLANNING) — the service never sets it on create
+    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room', status: 'PLANNING' })
     vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(created)
 
     const res = await app.inject({
@@ -234,8 +235,11 @@ describe('POST /api/jobs', () => {
     expect(res.statusCode).toBe(201)
     const body = res.json<{ id: string; status: string; jobType: string }>()
     expect(body.id).toBe(JOB_ID)
-    expect(body.status).toBe('started')
+    expect(body.status).toBe('planning')
     expect(body.jobType).toBe('garden_room')
+    // create data must not force a status — the schema default owns it
+    const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
+    expect('status' in data).toBe(false)
   })
 
   it('defaults missing jobType to other', async () => {
