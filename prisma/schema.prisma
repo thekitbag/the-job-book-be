@@ -49,7 +49,7 @@ model Job {
   ownerUserId          String
   title                String
   jobType              String
-  status               JobStatus @default(ACTIVE)
+  status               JobStatus @default(STARTED)
   roughLocationOrLabel String?
   notes                String?
   createdAt            DateTime  @default(now())
@@ -68,9 +68,9 @@ model Job {
 }
 
 enum JobStatus {
-  ACTIVE
-  PAUSED
-  COMPLETED
+  PLANNING
+  STARTED
+  FINISHED
   ARCHIVED
 }
 

@@ -32,11 +32,11 @@ function normalizeJob(job: {
 }
 
 // Statuses visible in the normal job list/current reads. Archived jobs are
-// the only hidden ones — pausing or finishing a job must never make it vanish.
-const VISIBLE_JOB_STATUSES = ['ACTIVE', 'PAUSED', 'COMPLETED'] as const
+// the only hidden ones — planning or finishing a job must never make it vanish.
+const VISIBLE_JOB_STATUSES = ['PLANNING', 'STARTED', 'FINISHED'] as const
 
 // Current-job preference when several visible jobs exist.
-const CURRENT_JOB_STATUS_PRIORITY = ['ACTIVE', 'PAUSED', 'COMPLETED'] as const
+const CURRENT_JOB_STATUS_PRIORITY = ['STARTED', 'PLANNING', 'FINISHED'] as const
 
 export async function getCurrentJob(userId: string) {
   const jobs = await prisma.job.findMany({
@@ -101,13 +101,13 @@ export async function createJob(userId: string, title: unknown, jobType: unknown
   return normalizeJob(job)
 }
 
-// Statuses a user may set through PATCH. Archiving is deliberately not
-// reachable from this endpoint in v1.
-const PATCHABLE_JOB_STATUSES = new Set(['active', 'paused', 'completed'])
+// Statuses a user may set through PATCH. Archived is settable: it hides the
+// job from the normal list but deletes nothing.
+const PATCHABLE_JOB_STATUSES = new Set(['planning', 'started', 'finished', 'archived'])
 
 // Owner-scoped job edit. Title and lightweight status are the editable fields
-// in this slice — no type/archive/delete changes; unknown body fields are
-// ignored, never applied.
+// in this slice — no type/delete changes; unknown body fields are ignored,
+// never applied.
 export async function patchJob(
   jobId: string,
   userId: string,
@@ -132,7 +132,7 @@ export async function patchJob(
 
   if (patch.status !== undefined) {
     if (typeof patch.status !== 'string' || !PATCHABLE_JOB_STATUSES.has(patch.status)) {
-      throw { code: ErrorCode.INVALID_FIELD, message: 'status must be active, paused, or completed' }
+      throw { code: ErrorCode.INVALID_FIELD, message: 'status must be planning, started, finished, or archived' }
     }
     data.status = patch.status.toUpperCase()
   }
