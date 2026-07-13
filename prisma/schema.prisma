@@ -45,15 +45,17 @@ enum UserRole {
 }
 
 model Job {
-  id                   String    @id @default(uuid())
-  ownerUserId          String
-  title                String
-  jobType              String
-  status               JobStatus @default(PLANNING)
-  roughLocationOrLabel String?
-  notes                String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                    String    @id @default(uuid())
+  ownerUserId           String
+  title                 String
+  jobType               String
+  status                JobStatus @default(PLANNING)
+  roughLocationOrLabel  String?
+  notes                 String?
+  customerTotalAmount   String?
+  customerTotalCurrency String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   owner            User                @relation(fields: [ownerUserId], references: [id])
   rawNotes         RawNote[]
@@ -63,6 +65,7 @@ model Job {
   queueItems       QueueItem[]
   budgetCategories JobBudgetCategory[]
   photos           JobPhoto[]
+  payments         JobPayment[]
 
   @@map("jobs")
 }
@@ -348,6 +351,26 @@ model JobPhoto {
   @@index([jobId, linkedNoteId])
   @@index([jobId, linkedMemoryItemId])
   @@map("job_photos")
+}
+
+model JobPayment {
+  id        String    @id @default(uuid())
+  jobId     String
+  amount    String
+  currency  String    @default("GBP")
+  paidAt    DateTime
+  note      String?
+  reference String?
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id])
+
+  @@index([jobId, paidAt])
+  @@index([jobId, isDeleted])
+  @@map("job_payments")
 }
 
 model SupportAuditEvent {
