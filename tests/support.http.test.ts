@@ -23,6 +23,7 @@ vi.mock('../src/db/client.js', () => ({
     memoryItem: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
     jobPhoto: { findMany: vi.fn(), findFirst: vi.fn() },
+    jobPayment: { findMany: vi.fn() },
     queueItem: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
     supportAuditEvent: { create: vi.fn(), findFirst: vi.fn() },
   },
@@ -91,6 +92,7 @@ beforeEach(async () => {
   vi.mocked(prisma.jobPhoto.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobPhoto.findFirst as any).mockResolvedValue(null)
   vi.mocked(prisma.queueItem.findMany as any).mockResolvedValue([])
+  vi.mocked((prisma as any).jobPayment.findMany).mockResolvedValue([])
   vi.mocked((prisma as any).supportAuditEvent.create).mockImplementation(async ({ data }: any) => ({ id: 'audit-1', createdAt: new Date(), ...data }))
   vi.mocked((prisma as any).supportAuditEvent.findFirst).mockResolvedValue(null)
 })
@@ -332,6 +334,41 @@ describe('support view-as read endpoints', () => {
       expect(serialized).not.toContain('storageKey')
       expect(serialized).not.toContain(`jobs/${JOB_ID}/photos`)
       expect(serialized.length).toBeLessThan(600)
+    }
+  })
+})
+
+describe('GET /api/internal/support/jobs/:jobId/payments', () => {
+  it('returns the payments summary for the target user and audits the read', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findUnique as any).mockResolvedValue({
+      ...makeJob(), customerTotalAmount: '4200', customerTotalCurrency: 'GBP',
+    })
+    vi.mocked((prisma as any).jobPayment.findMany).mockResolvedValue([{
+      id: 'sup-pay-1', jobId: JOB_ID, amount: '1500', currency: 'GBP',
+      paidAt: new Date('2026-07-10T11:00:00.000Z'), note: 'deposit', reference: null,
+      isDeleted: false, deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    }])
+    const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/payments`, headers: asAdmin })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.customerTotalAmount).toBe('4200')
+    expect(body.totalPaidAmount).toBe('1500')
+    expect(body.stillOwedAmount).toBe('2700')
+    expect(body.payments[0].id).toBe('sup-pay-1')
+
+    const actions = await auditActions()
+    expect(actions).toContainEqual(expect.objectContaining({
+      action: 'support_view_as_started', targetJobId: JOB_ID, metadata: { route: 'payments' },
+    }))
+  })
+
+  it('is refused for non-internal users and exposes no write methods', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/payments`, headers: asPilot })
+    expect(res.statusCode).toBe(403)
+    for (const method of ['POST', 'PATCH', 'DELETE'] as const) {
+      const write = await app.inject({ method, url: `/api/internal/support/jobs/${JOB_ID}/payments`, headers: { ...asAdmin, 'content-type': 'application/json' }, payload: {} })
+      expect([404, 405], method).toContain(write.statusCode)
     }
   })
 })
