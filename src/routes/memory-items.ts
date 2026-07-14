@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import type { FastifyReply } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
-import { patchMemoryItem, verifyMemoryItem, createMemoryItem } from '../services/memory-items.js'
+import { patchMemoryItem, verifyMemoryItem, createMemoryItem, removeMemoryItem } from '../services/memory-items.js'
 import { handleServiceError } from './jobs.js'
 import {
   validateOptionalDecimal,
@@ -127,6 +127,20 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       const result = await patchMemoryItem(jobId, memoryItemId, request.userId, body as never)
       return reply.send(result)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  // DELETE /api/jobs/:jobId/memory-items/:memoryItemId — soft-remove from the
+  // active job record; source evidence is preserved
+  fastify.delete<{
+    Params: { jobId: string; memoryItemId: string }
+  }>('/api/jobs/:jobId/memory-items/:memoryItemId', async (request, reply) => {
+    const { jobId, memoryItemId } = request.params
+    try {
+      await removeMemoryItem(jobId, memoryItemId, request.userId)
+      return reply.code(204).send()
     } catch (err: unknown) {
       return handleServiceError(err, reply)
     }

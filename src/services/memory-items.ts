@@ -61,7 +61,7 @@ export async function patchMemoryItem(
   await verifyJobOwnership(jobId, userId)
 
   const existing = await prisma.memoryItem.findFirst({
-    where: { id: memoryItemId, jobId },
+    where: { id: memoryItemId, jobId, isRemoved: false },
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
@@ -174,10 +174,27 @@ export async function patchMemoryItem(
   return normalizeMemoryItem(updated, fact)
 }
 
+// Soft-remove a confirmed memory item from the active job record. The row is
+// never hard-deleted and source note/audio/transcript/candidate fact/review
+// decision are untouched — only active views stop showing it.
+export async function removeMemoryItem(jobId: string, memoryItemId: string, userId: string) {
+  await verifyJobOwnership(jobId, userId)
+
+  const existing = await prisma.memoryItem.findFirst({
+    where: { id: memoryItemId, jobId, isRemoved: false },
+  })
+  if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  await prisma.memoryItem.update({
+    where: { id: memoryItemId },
+    data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId },
+  })
+}
+
 export async function verifyMemoryItem(jobId: string, memoryItemId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
 
-  const existing = await prisma.memoryItem.findFirst({ where: { id: memoryItemId, jobId } })
+  const existing = await prisma.memoryItem.findFirst({ where: { id: memoryItemId, jobId, isRemoved: false } })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
   const updated = await prisma.memoryItem.update({

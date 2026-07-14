@@ -171,7 +171,7 @@ export async function createJobPhoto(input: CreateJobPhotoInput, storage: AudioS
 export async function listJobPhotos(jobId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
   const photos = await prisma.jobPhoto.findMany({
-    where: { jobId },
+    where: { jobId, isDeleted: false },
     include: LINKED_INCLUDE,
     orderBy: [{ uploadedAt: 'desc' }, { createdAt: 'desc' }],
   })
@@ -185,7 +185,7 @@ export async function getJobPhotoFile(
   storage: AudioStorageProvider,
 ) {
   await verifyJobOwnership(jobId, userId)
-  const photo = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId } })
+  const photo = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
   if (!photo) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
 
   let bytes: Buffer
@@ -213,7 +213,7 @@ export async function patchJobPhoto(
   patch: PatchJobPhotoInput,
 ) {
   await verifyJobOwnership(jobId, userId)
-  const existing = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId } })
+  const existing = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
   if (!existing) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
 
   const descriptor =
@@ -239,4 +239,18 @@ export async function patchJobPhoto(
     include: LINKED_INCLUDE,
   })
   return normalizeJobPhoto(updated)
+}
+
+// Soft delete: the photo disappears from list/file reads but the metadata row
+// and the stored object remain (no physical R2/local deletion in this slice).
+// Deleting an already-deleted photo is 404.
+export async function deleteJobPhoto(jobId: string, photoId: string, userId: string) {
+  await verifyJobOwnership(jobId, userId)
+  const existing = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
+  if (!existing) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
+
+  await prisma.jobPhoto.update({
+    where: { id: photoId },
+    data: { isDeleted: true, deletedAt: new Date(), deletedByUserId: userId },
+  })
 }
