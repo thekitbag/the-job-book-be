@@ -466,7 +466,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
   }))
 
   const memoryItems = await prisma.memoryItem.findMany({
-    where: { jobId },
+    where: { jobId, isRemoved: false },
     include: { sourceFact: { select: { uncertaintyFlags: true } } },
     orderBy: { createdAt: 'desc' },
   })

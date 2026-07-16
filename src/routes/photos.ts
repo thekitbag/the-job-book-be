@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
 import type { AudioStorageProvider } from '../storage/index.js'
-import { createJobPhoto, listJobPhotos, getJobPhotoFile, patchJobPhoto } from '../services/photos.js'
+import { createJobPhoto, listJobPhotos, getJobPhotoFile, patchJobPhoto, deleteJobPhoto } from '../services/photos.js'
 import { handleServiceError } from './jobs.js'
 
 interface PhotosRouteOptions {
@@ -101,6 +101,20 @@ const photosRoutes: FastifyPluginAsync<PhotosRouteOptions> = async (fastify, opt
       const body = request.body ?? {}
       const result = await patchJobPhoto(jobId, photoId, request.userId, body)
       return reply.send(result)
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  // DELETE /api/jobs/:jobId/photos/:photoId — soft delete; the stored object is
+  // kept, only active reads stop showing it
+  fastify.delete<{
+    Params: { jobId: string; photoId: string }
+  }>('/api/jobs/:jobId/photos/:photoId', async (request, reply) => {
+    try {
+      const { jobId, photoId } = request.params
+      await deleteJobPhoto(jobId, photoId, request.userId)
+      return reply.code(204).send()
     } catch (err: unknown) {
       return handleServiceError(err, reply)
     }

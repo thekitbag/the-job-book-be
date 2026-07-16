@@ -199,7 +199,9 @@ export async function getBudgetSummary(jobId: string, userId: string) {
       where: { jobId, isArchived: false },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     }),
-    prisma.memoryItem.findMany({ where: { jobId, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR'] } } }),
+    prisma.memoryItem.findMany({
+      where: { jobId, isRemoved: false, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR'] } },
+    }),
   ])
 
   const safe = items

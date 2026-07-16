@@ -208,6 +208,11 @@ export async function getJobInspection(
       sourceCandidateFactId: m.sourceCandidateFactId,
       reviewDecisionId: m.reviewDecisionId,
       createdAt: m.createdAt,
+      // Inspection is the one view that still shows soft-removed items, so they
+      // must be marked — everything else filters them out.
+      isRemoved: m.isRemoved,
+      removedAt: m.removedAt,
+      removedReason: m.removedReason,
     })),
     possibleMisses,
   }

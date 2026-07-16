@@ -296,6 +296,10 @@ model MemoryItem {
   happenedAt            DateTime?
   unresolvedFlags       String[] @default([])
   budgetCategoryId      String?
+  isRemoved             Boolean   @default(false)
+  removedAt             DateTime?
+  removedByUserId       String?
+  removedReason         String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -306,6 +310,7 @@ model MemoryItem {
   linkedPhotos   JobPhoto[]
 
   @@index([jobId, budgetCategoryId])
+  @@index([jobId, isRemoved])
   @@map("memory_items")
 }
 
@@ -338,6 +343,9 @@ model JobPhoto {
   sizeBytes          Int
   linkedNoteId       String?
   linkedMemoryItemId String?
+  isDeleted          Boolean   @default(false)
+  deletedAt          DateTime?
+  deletedByUserId    String?
   uploadedAt         DateTime @default(now())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -350,6 +358,7 @@ model JobPhoto {
   @@index([jobId, uploadedAt])
   @@index([jobId, linkedNoteId])
   @@index([jobId, linkedMemoryItemId])
+  @@index([jobId, isDeleted])
   @@map("job_photos")
 }
 

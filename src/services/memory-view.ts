@@ -475,7 +475,8 @@ export async function getMemoryView(jobId: string, userId: string) {
 
   const [memoryItems, { sections: queueSections }] = await Promise.all([
     prisma.memoryItem.findMany({
-      where: { jobId },
+      // Active job record only — soft-removed items are invisible here
+      where: { jobId, isRemoved: false },
       include: {
         sourceFact: {
           include: {
