@@ -213,6 +213,10 @@ export async function getJobInspection(
       isRemoved: m.isRemoved,
       removedAt: m.removedAt,
       removedReason: m.removedReason,
+      // Returned-material linkage/refund, for support traceability.
+      returnedFromMemoryItemId: m.returnedFromMemoryItemId,
+      refundAmount: m.refundAmount,
+      refundCurrency: m.refundCurrency,
     })),
     possibleMisses,
   }

@@ -33,7 +33,7 @@ beforeEach(async () => {
 describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
   const headers = AUTH_HEADERS
 
-  it('returns all eight trusted-memory sections', async () => {
+  it('returns all nine trusted-memory sections', async () => {
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
     const res = await app.inject({ method: 'GET', url: MEMORY_VIEW_URL, headers })
@@ -45,6 +45,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
       'ordered_materials',
       'used_materials',
       'leftovers',
+      'returned_materials',
       'supplier_delivery_notes',
       'customer_changes',
       'watch_outs',

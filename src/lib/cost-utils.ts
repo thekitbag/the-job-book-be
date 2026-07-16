@@ -42,6 +42,17 @@ export function formatLineTotalLabel(
   return `${symbol}${totalCostAmount} total`
 }
 
+// Returns "£80 refund" — only when a refund amount and currency are present.
+// Refund is money back on returned materials, kept separate from spend labels.
+export function formatRefundLabel(
+  refundAmount: string | null | undefined,
+  refundCurrency: string | null | undefined,
+): string | null {
+  if (!refundAmount || !refundCurrency) return null
+  const symbol = refundCurrency === 'GBP' ? '£' : `${refundCurrency} `
+  return `${symbol}${refundAmount} refund`
+}
+
 // Pure arithmetic: qty × unitCost when qualifier is 'each' and both are strict
 // positives. Basis-only (no unit/currency); used for conflict detection where the
 // question is purely whether an explicit total disagrees with quantity × unit cost.

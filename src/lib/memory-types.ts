@@ -21,6 +21,9 @@ export const MEMORY_TYPES: readonly MemoryTypeInfo[] = [
   { storedType: 'ORDERED_MATERIAL', apiType: 'ordered_material', sectionKey: 'ordered_materials', canAssignBudgetCategory: true, canContributeSpend: true },
   { storedType: 'USED_MATERIAL', apiType: 'used_material', sectionKey: 'used_materials', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'LEFTOVER_MATERIAL', apiType: 'leftover_material', sectionKey: 'leftovers', canAssignBudgetCategory: false, canContributeSpend: false },
+  // Returned materials are trusted memory but never positive spend: a trusted
+  // refund reduces net known cost separately (see memory-view refund summary).
+  { storedType: 'RETURNED_MATERIAL', apiType: 'returned_material', sectionKey: 'returned_materials', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'SUPPLIER_DELIVERY_NOTE', apiType: 'supplier_delivery_note', sectionKey: 'supplier_delivery_notes', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'CUSTOMER_CHANGE', apiType: 'customer_change', sectionKey: 'customer_changes', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'WATCH_OUT', apiType: 'watch_out', sectionKey: 'watch_outs', canAssignBudgetCategory: false, canContributeSpend: false },
