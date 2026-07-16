@@ -19,6 +19,7 @@ const ALL_STORED = [
   'ORDERED_MATERIAL',
   'USED_MATERIAL',
   'LEFTOVER_MATERIAL',
+  'RETURNED_MATERIAL',
   'SUPPLIER_DELIVERY_NOTE',
   'CUSTOMER_CHANGE',
   'WATCH_OUT',
@@ -31,6 +32,7 @@ const EXPECTED_SECTIONS: Record<string, string> = {
   ORDERED_MATERIAL: 'ordered_materials',
   USED_MATERIAL: 'used_materials',
   LEFTOVER_MATERIAL: 'leftovers',
+  RETURNED_MATERIAL: 'returned_materials',
   SUPPLIER_DELIVERY_NOTE: 'supplier_delivery_notes',
   CUSTOMER_CHANGE: 'customer_changes',
   WATCH_OUT: 'watch_outs',
@@ -102,13 +104,14 @@ describe('eligibility', () => {
 })
 
 describe('VALID_MEMORY_TYPES (request-target set)', () => {
-  it('is the eight lower-case non-unclear types', () => {
+  it('is the nine lower-case non-unclear types', () => {
     expect([...VALID_MEMORY_TYPES].sort()).toEqual([
       'customer_change',
       'general_note',
       'labour',
       'leftover_material',
       'ordered_material',
+      'returned_material',
       'supplier_delivery_note',
       'used_material',
       'watch_out',

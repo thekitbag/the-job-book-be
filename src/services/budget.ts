@@ -200,7 +200,7 @@ export async function getBudgetSummary(jobId: string, userId: string) {
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     }),
     prisma.memoryItem.findMany({
-      where: { jobId, isRemoved: false, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR'] } },
+      where: { jobId, isRemoved: false, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR', 'RETURNED_MATERIAL'] } },
     }),
   ])
 
@@ -208,6 +208,21 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     .map(classifySpend)
     .filter((c): c is Extract<ReturnType<typeof classifySpend>, { kind: 'included' }> => c.kind === 'included')
     .map((c) => c.row)
+
+  // Trusted refunds from returned materials: strict positive GBP refund, no
+  // unresolved flags. These reduce the job-level net known spend but are NOT
+  // attributed to any category — category rows stay gross, and the refund is
+  // exposed as a separate job-level adjustment.
+  const trustedRefundAmounts = items
+    .filter(
+      (m) =>
+        m.memoryType === 'RETURNED_MATERIAL' &&
+        m.unresolvedFlags.length === 0 &&
+        m.refundCurrency === 'GBP' &&
+        (parseAmount(m.refundAmount) ?? 0) > 0,
+    )
+    .map((m) => m.refundAmount)
+  const knownRefundAmount = trustedRefundAmounts.length > 0 ? sumKnownSpend(trustedRefundAmounts) : null
 
   // Group safe rows by category id (null → uncategorised).
   const rowsByCategory = new Map<string, SpendRow[]>()
@@ -278,15 +293,25 @@ export async function getBudgetSummary(jobId: string, userId: string) {
   const totalBudgetAmount = anyBudget ? String(round2(totalBudgetNum)) : null
   const totalSpendAmount = anySpend ? String(round2(totalSpendNum)) : null
 
+  // Net known spend = gross known spend − trusted refunds. Exposed as an explicit
+  // field so the job-level Spend total can reflect refunds without touching
+  // category attribution. remaining below is computed against net spend.
+  const refundNum = parseAmount(knownRefundAmount) ?? 0
+  const anyRefund = knownRefundAmount !== null
+  const netSpendNum = round2(totalSpendNum - refundNum)
+  const netKnownSpendAmount = anySpend || anyRefund ? String(netSpendNum) : null
+
+  // Remaining/over-budget are measured against net known spend (after refunds),
+  // so a refund correctly restores headroom against the budget.
   let remainingAmount: string | null = null
   let remainingLabel: string | null = null
   let overBudget = false
   if (anyBudget) {
-    const remaining = round2(totalBudgetNum - totalSpendNum)
-    overBudget = totalSpendNum > totalBudgetNum
+    const remaining = round2(totalBudgetNum - netSpendNum)
+    overBudget = netSpendNum > totalBudgetNum
     remainingAmount = String(remaining)
     remainingLabel = overBudget
-      ? `${gbp(String(round2(totalSpendNum - totalBudgetNum)))} over budget`
+      ? `${gbp(String(round2(netSpendNum - totalBudgetNum)))} over budget`
       : `${gbp(remainingAmount)} remaining`
   }
 
@@ -299,8 +324,16 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     totals: {
       budgetAmount: totalBudgetAmount,
       budgetCurrency: anyBudget ? 'GBP' : null,
+      // knownSpendAmount stays gross (equals the sum of the visible category and
+      // uncategorized rows). Refunds are a separate adjustment; netKnownSpendAmount
+      // is the job-level figure to show as the Spend total.
       knownSpendAmount: totalSpendAmount,
       knownSpendCurrency: anySpend ? 'GBP' : null,
+      knownRefundAmount,
+      knownRefundCurrency: anyRefund ? 'GBP' : null,
+      knownRefundLabel: knownRefundAmount !== null ? `${gbp(knownRefundAmount)} refunded` : null,
+      netKnownSpendAmount,
+      netKnownSpendCurrency: anySpend || anyRefund ? 'GBP' : null,
       remainingAmount,
       remainingLabel,
       overBudget,

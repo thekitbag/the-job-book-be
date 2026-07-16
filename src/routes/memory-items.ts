@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import type { FastifyReply } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
-import { patchMemoryItem, verifyMemoryItem, createMemoryItem, removeMemoryItem } from '../services/memory-items.js'
+import { patchMemoryItem, verifyMemoryItem, createMemoryItem, removeMemoryItem, returnMaterial } from '../services/memory-items.js'
 import { handleServiceError } from './jobs.js'
 import {
   validateOptionalDecimal,
@@ -9,6 +9,9 @@ import {
   validateOptionalUncertaintyResolution,
   validateMemoryTargetType,
   validateBudgetCategoryRef,
+  isValidDecimalString,
+  validateOptionalGbpCurrency,
+  validateOptionalIsoDate,
 } from '../lib/request-validation.js'
 import type { ValidationError } from '../lib/request-validation.js'
 
@@ -141,6 +144,49 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       await removeMemoryItem(jobId, memoryItemId, request.userId)
       return reply.code(204).send()
+    } catch (err: unknown) {
+      return handleServiceError(err, reply)
+    }
+  })
+
+  // POST /api/jobs/:jobId/memory-items/:memoryItemId/return — move all or part of
+  // a Left over item to Returned, recording merchant/refund/date. Full return
+  // soft-removes the source leftover; partial return reduces its quantity.
+  fastify.post<{
+    Params: { jobId: string; memoryItemId: string }
+    Body: {
+      quantity?: string | null
+      unit?: string | null
+      supplierName?: string | null
+      refundAmount?: string | null
+      refundCurrency?: string | null
+      happenedAt?: string | null
+    }
+  }>('/api/jobs/:jobId/memory-items/:memoryItemId/return', async (request, reply) => {
+    const { jobId, memoryItemId } = request.params
+    const body = request.body ?? {}
+
+    if (body.quantity == null) {
+      return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'quantity is required' })
+    }
+    // Shape validation (strict positive decimals; numeric bounds vs. the leftover
+    // are enforced in the service). refundAmount must be a positive decimal too.
+    if (!isValidDecimalString(body.quantity) || Number(body.quantity) <= 0) {
+      return sendError(reply, { code: ErrorCode.INVALID_FIELD, message: 'quantity must be a positive decimal string' })
+    }
+    if (body.refundAmount != null) {
+      if (!isValidDecimalString(body.refundAmount) || Number(body.refundAmount) <= 0) {
+        return sendError(reply, { code: ErrorCode.INVALID_FIELD, message: 'refundAmount must be a positive decimal string' })
+      }
+    }
+    const error =
+      validateOptionalGbpCurrency(body.refundCurrency, 'refundCurrency') ??
+      validateOptionalIsoDate(body.happenedAt, 'happenedAt')
+    if (error) return sendError(reply, error)
+
+    try {
+      const result = await returnMaterial(jobId, memoryItemId, request.userId, body)
+      return reply.code(201).send(result)
     } catch (err: unknown) {
       return handleServiceError(err, reply)
     }

@@ -6,6 +6,7 @@ import {
   strictParsePositive,
   formatUnitCostLabel,
   formatLineTotalLabel,
+  formatRefundLabel,
 } from '../lib/cost-utils.js'
 import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { SpendClassifiable } from '../lib/spend-classification.js'
@@ -423,8 +424,9 @@ function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifia
   }
 }
 
-// Combine ordered-material and labour known cost into a single job-level total.
-// Equals budget-summary.totals.knownSpendAmount for the same GBP state.
+// Combine ordered-material and labour known cost into the job-level gross total
+// (before refunds). Equals budget-summary.totals.knownSpendAmount for the same
+// GBP state; the net-of-refunds figure is costSummary.totalKnownCost.
 function buildTotalKnownCost(
   ordered: { knownSpendAmount: string | null; includedMemoryItemIds: string[] },
   labour: { knownSpendAmount: string | null; includedMemoryItemIds: string[] },
@@ -445,10 +447,81 @@ function buildTotalKnownCost(
   }
 }
 
+// ── Returned-material refund summary ──────────────────────────────────────────
+
+interface RefundClassifiable {
+  id: string
+  summary: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  supplierName: string | null
+  happenedAt: Date | null
+  refundAmount: string | null
+  refundCurrency: string | null
+  unresolvedFlags: string[]
+}
+
+// A trusted refund reduces net known cost. Inclusion mirrors the spend classifier:
+// active RETURNED_MATERIAL (already filtered), a strict positive refundAmount,
+// GBP currency, and no unresolved flags. Returned items without a trusted refund
+// still appear in Materials/Returned but never move the money.
+function buildRefundSummary(items: RefundClassifiable[]) {
+  const rows = items
+    .filter(
+      (m) =>
+        m.unresolvedFlags.length === 0 &&
+        m.refundCurrency === 'GBP' &&
+        strictParsePositive(m.refundAmount) !== null,
+    )
+    .map((m) => ({
+      memoryItemId: m.id,
+      itemLabel: m.materialName ?? m.summary,
+      materialName: m.materialName,
+      quantity: m.quantity,
+      unit: m.unit,
+      supplierName: m.supplierName,
+      refundAmount: m.refundAmount as string,
+      refundCurrency: 'GBP' as const,
+      refundLabel: formatRefundLabel(m.refundAmount, m.refundCurrency) as string,
+      happenedAt: m.happenedAt,
+    }))
+
+  const knownRefundAmount = rows.length > 0 ? sumKnownSpend(rows.map((r) => r.refundAmount)) : null
+  return {
+    knownRefundAmount,
+    knownRefundCurrency: rows.length > 0 ? ('GBP' as const) : null,
+    knownRefundLabel: knownRefundAmount !== null ? `£${knownRefundAmount} refunded` : null,
+    rows,
+  }
+}
+
+// Net known cost = gross known cost − trusted refunds. Keeps the existing
+// knownSpend* key shape so the field stays a drop-in for the job-level total,
+// but the value is now net of refunds.
+function buildNetKnownCost(
+  gross: { knownSpendAmount: string | null; includedMemoryItemIds: string[] },
+  knownRefundAmount: string | null,
+) {
+  if (gross.knownSpendAmount === null && knownRefundAmount === null) {
+    return { knownSpendAmount: null, knownSpendCurrency: null, knownSpendLabel: null, includedMemoryItemIds: gross.includedMemoryItemIds }
+  }
+  const net =
+    (strictParsePositive(gross.knownSpendAmount) ?? 0) - (strictParsePositive(knownRefundAmount) ?? 0)
+  const knownSpendAmount = String(Math.round(net * 100) / 100)
+  return {
+    knownSpendAmount,
+    knownSpendCurrency: 'GBP' as const,
+    knownSpendLabel: `£${knownSpendAmount} known cost`,
+    includedMemoryItemIds: gross.includedMemoryItemIds,
+  }
+}
+
 const SECTION_CONFIG = [
   { key: 'ordered_materials', label: 'Ordered materials' },
   { key: 'used_materials', label: 'Used materials' },
   { key: 'leftovers', label: 'Leftovers' },
+  { key: 'returned_materials', label: 'Returned materials' },
   { key: 'supplier_delivery_notes', label: 'Supplier delivery notes' },
   { key: 'customer_changes', label: 'Customer changes' },
   { key: 'watch_outs', label: 'Watch outs' },
@@ -522,6 +595,10 @@ export async function getMemoryView(jobId: string, userId: string) {
         happenedAt: m.happenedAt,
         isManual: m.isManual,
         budgetCategoryId: m.budgetCategoryId,
+        returnedFromMemoryItemId: m.returnedFromMemoryItemId,
+        refundAmount: m.refundAmount,
+        refundCurrency: m.refundCurrency,
+        refundLabel: formatRefundLabel(m.refundAmount, m.refundCurrency),
         unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
         lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
         uncertaintyFlags: m.unresolvedFlags,
@@ -572,10 +649,16 @@ export async function getMemoryView(jobId: string, userId: string) {
   const labourItems = bySection.get('labour') ?? []
   const orderedMaterials = buildOrderedMaterialsCostSummary(bySection.get('ordered_materials') ?? [])
   const labour = buildLabourCostSummary(labourItems)
+  // Gross known cost (bought + labour) before refunds; refunds from trusted
+  // returned materials; net total = gross − refunds.
+  const grossKnownCost = buildTotalKnownCost(orderedMaterials, labour)
+  const refunds = buildRefundSummary(bySection.get('returned_materials') ?? [])
   const costSummary = {
     orderedMaterials,
     labour,
-    totalKnownCost: buildTotalKnownCost(orderedMaterials, labour),
+    grossKnownCost,
+    refunds,
+    totalKnownCost: buildNetKnownCost(grossKnownCost, refunds.knownRefundAmount),
   }
 
   const labourHoursSummary = buildLabourHoursSummary(labourItems)

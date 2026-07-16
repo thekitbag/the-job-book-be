@@ -7,6 +7,8 @@ import {
   hasCostConflict,
   formatUnitCostLabel,
   formatLineTotalLabel,
+  formatRefundLabel,
+  strictParsePositive,
 } from '../lib/cost-utils.js'
 import { assertAssignableCategory } from './budget.js'
 import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
@@ -191,6 +193,173 @@ export async function removeMemoryItem(jobId: string, memoryItemId: string, user
   })
 }
 
+// Include shape shared by the return operation's re-reads so both the returned
+// item and any remaining leftover normalize with full source context.
+const FACT_INCLUDE = {
+  sourceFact: {
+    include: {
+      sourceNote: { select: { id: true, capturedAt: true } },
+      transcript: { select: { id: true, text: true } },
+    },
+  },
+} as const
+
+export interface ReturnMaterialInput {
+  quantity?: string | null
+  unit?: string | null
+  supplierName?: string | null
+  refundAmount?: string | null
+  refundCurrency?: string | null
+  happenedAt?: string | null
+}
+
+// Trim a decimal to a stable string (drops floating-point dust from subtraction).
+function formatQuantity(n: number): string {
+  return String(Math.round(n * 1000) / 1000)
+}
+
+// Plain-language summary for a returned item: "Returned 4 sheets OSB to Jewson · £80 refund".
+function deriveReturnSummary(
+  materialName: string | null,
+  quantity: string,
+  unit: string | null,
+  supplierName: string | null,
+  refundLabel: string | null,
+): string {
+  const head = ['Returned', quantity, unit, materialName].filter(Boolean).join(' ').trim()
+  const withSupplier = supplierName ? `${head} to ${supplierName}` : head
+  return refundLabel ? `${withSupplier} · ${refundLabel}` : withSupplier
+}
+
+// Return all or part of a Left over item to a merchant. Creates a trusted
+// RETURNED_MATERIAL memory item for the returned quantity and either soft-removes
+// (full) or reduces (partial) the source leftover — transactionally, so active
+// Left over and Returned can never disagree. Source evidence is preserved: the
+// original leftover row (and its note/transcript/fact chain) is never deleted.
+export async function returnMaterial(
+  jobId: string,
+  memoryItemId: string,
+  userId: string,
+  input: ReturnMaterialInput,
+) {
+  await verifyJobOwnership(jobId, userId)
+
+  const source = await prisma.memoryItem.findFirst({
+    where: { id: memoryItemId, jobId, isRemoved: false },
+  })
+  if (!source) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+  if (source.memoryType !== 'LEFTOVER_MATERIAL') {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'Only a leftover_material item can be returned' }
+  }
+
+  // Returned quantity: required, strict positive decimal.
+  const returnedQtyStr = input.quantity ?? null
+  const returnedQty = strictParsePositive(returnedQtyStr)
+  if (returnedQtyStr == null || returnedQty === null || returnedQty <= 0) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'quantity must be a positive decimal string' }
+  }
+
+  // Compare against the active leftover quantity. If the leftover quantity is
+  // missing or non-numeric, a safe comparison is impossible — reject rather than
+  // guess (never allow a silent over-return).
+  const leftoverQty = strictParsePositive(source.quantity)
+  if (leftoverQty === null) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'leftover quantity is not a number; cannot return safely' }
+  }
+  if (returnedQty > leftoverQty) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'returned quantity exceeds remaining leftover quantity' }
+  }
+
+  // Refund is optional; when present it must be a strict positive decimal and GBP.
+  let refundAmount: string | null = null
+  let refundCurrency: string | null = null
+  if (input.refundAmount != null && input.refundAmount !== '') {
+    const parsed = strictParsePositive(input.refundAmount)
+    if (parsed === null || parsed <= 0) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'refundAmount must be a positive decimal string' }
+    }
+    if (input.refundCurrency != null && input.refundCurrency !== 'GBP') {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'refundCurrency must be GBP' }
+    }
+    refundAmount = input.refundAmount
+    refundCurrency = input.refundCurrency ?? 'GBP'
+  }
+
+  const unit = input.unit !== undefined && input.unit !== null && input.unit !== ''
+    ? input.unit
+    : source.unit
+  const supplierName = input.supplierName?.trim() ? input.supplierName.trim() : null
+  const happenedAt = parseHappenedAt(input.happenedAt)
+  const summary = deriveReturnSummary(
+    source.materialName,
+    returnedQtyStr,
+    unit,
+    supplierName,
+    formatRefundLabel(refundAmount, refundCurrency),
+  )
+
+  const isFullReturn = returnedQty === leftoverQty
+
+  const { returnedItem, remainingLeftover } = await prisma.$transaction(async (tx) => {
+    const decision = await tx.reviewDecision.create({
+      data: {
+        jobId,
+        decidedBy: userId,
+        action: 'ADD_MISSING',
+        candidateFactId: null,
+        sectionKey: 'returned_materials',
+        sourceCandidateFactIds: [],
+      },
+    })
+
+    const returnedItem = await tx.memoryItem.create({
+      data: {
+        jobId,
+        reviewDecisionId: decision.id,
+        sourceCandidateFactId: null,
+        isManual: true,
+        memoryType: 'RETURNED_MATERIAL',
+        summary,
+        materialName: source.materialName,
+        quantity: returnedQtyStr,
+        unit,
+        supplierName,
+        happenedAt,
+        refundAmount,
+        refundCurrency,
+        returnedFromMemoryItemId: source.id,
+      },
+      include: FACT_INCLUDE,
+    })
+
+    let remainingLeftover = null
+    if (isFullReturn) {
+      // Full return: the source leftover is fully consumed. Soft-remove it (source
+      // evidence preserved) with a reason distinguishing it from a plain delete.
+      await tx.memoryItem.update({
+        where: { id: source.id },
+        data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId, removedReason: 'returned' },
+      })
+    } else {
+      // Partial return: the source leftover keeps its remaining quantity.
+      remainingLeftover = await tx.memoryItem.update({
+        where: { id: source.id },
+        data: { quantity: formatQuantity(leftoverQty - returnedQty) },
+        include: FACT_INCLUDE,
+      })
+    }
+
+    return { returnedItem, remainingLeftover }
+  })
+
+  return {
+    returnedItem: normalizeMemoryItem(returnedItem, returnedItem.sourceFact ?? null),
+    remainingLeftoverItem: remainingLeftover
+      ? normalizeMemoryItem(remainingLeftover, remainingLeftover.sourceFact ?? null)
+      : null,
+  }
+}
+
 export async function verifyMemoryItem(jobId: string, memoryItemId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
 
@@ -236,6 +405,9 @@ function normalizeMemoryItem(
     isManual: boolean
     unresolvedFlags: string[]
     budgetCategoryId: string | null
+    returnedFromMemoryItemId: string | null
+    refundAmount: string | null
+    refundCurrency: string | null
     sourceCandidateFactId: string | null
     reviewDecisionId: string
     createdAt: Date
@@ -270,6 +442,10 @@ function normalizeMemoryItem(
     happenedAt: item.happenedAt,
     isManual: item.isManual,
     budgetCategoryId: item.budgetCategoryId,
+    returnedFromMemoryItemId: item.returnedFromMemoryItemId,
+    refundAmount: item.refundAmount,
+    refundCurrency: item.refundCurrency,
+    refundLabel: formatRefundLabel(item.refundAmount, item.refundCurrency),
     unitCostLabel: formatUnitCostLabel(item.costAmount, item.costCurrency, item.costQualifier),
     lineTotalLabel: formatLineTotalLabel(item.totalCostAmount, item.costCurrency),
     uncertaintyFlags: item.unresolvedFlags,
@@ -330,6 +506,8 @@ function deriveManualSummary(input: CreateMemoryItemInput): string | null {
       return name ? (join('Used', qty, unit, name) || name) : null
     case 'leftover_material':
       return name ? (join(qty, unit, name, 'left') || name) : null
+    case 'returned_material':
+      return name ? (join('Returned', qty, unit, name) || name) : null
     case 'labour': {
       const person = input.labourPerson?.trim()
       const hours = input.labourHours?.trim()

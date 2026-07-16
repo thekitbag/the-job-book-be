@@ -179,6 +179,7 @@ enum FactType {
   ORDERED_MATERIAL
   USED_MATERIAL
   LEFTOVER_MATERIAL
+  RETURNED_MATERIAL
   SUPPLIER_DELIVERY_NOTE
   CUSTOMER_CHANGE
   WATCH_OUT
@@ -300,6 +301,13 @@ model MemoryItem {
   removedAt             DateTime?
   removedByUserId       String?
   removedReason         String?
+  // Returned materials: a RETURNED_MATERIAL item records the returned quantity
+  // (quantity/unit), merchant (supplierName), and — separate from spend cost
+  // fields — a trusted refund. returnedFromMemoryItemId is a soft string link
+  // back to the source Left over item (no FK; v1 traceability only).
+  returnedFromMemoryItemId String?
+  refundAmount             String?
+  refundCurrency           String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
