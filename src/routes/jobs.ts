@@ -72,6 +72,8 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.PHOTO_LINK_TARGET_NOT_FOUND]: 404,
   [ErrorCode.USER_NOT_FOUND]: 404,
   [ErrorCode.PAYMENT_NOT_FOUND]: 404,
+  [ErrorCode.MONEY_EVENT_NOT_FOUND]: 404,
+  [ErrorCode.MONEY_EVENT_ALREADY_EXISTS]: 400,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {

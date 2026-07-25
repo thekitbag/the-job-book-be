@@ -13,6 +13,7 @@ import {
 import { assertAssignableCategory } from './budget.js'
 import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
 import { ukLocalNoon } from '../lib/dates.js'
+import { refundMoneyEventData } from './money.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -331,6 +332,16 @@ export async function returnMaterial(
       },
       include: FACT_INCLUDE,
     })
+
+    // Money in: a trusted GBP refund records a REFUND money event linked to the
+    // returned item (in the same transaction, so Money and the return commit
+    // together). No trusted refund → no Money movement. The partial unique index
+    // prevents a duplicate active refund for this returned item.
+    if (refundAmount !== null && refundCurrency === 'GBP') {
+      await tx.jobMoneyEvent.create({
+        data: refundMoneyEventData(jobId, returnedItem.id, refundAmount, happenedAt ?? new Date()),
+      })
+    }
 
     let remainingLeftover = null
     if (isFullReturn) {
