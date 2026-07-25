@@ -12,6 +12,7 @@ import { getReviewQueue } from './review-queue.js'
 import { listJobPhotos, getJobPhotoFile } from './photos.js'
 import { getJobInspection } from './inspection.js'
 import { getJobPayments } from './payments.js'
+import { getJobMoney } from './money.js'
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
@@ -261,6 +262,11 @@ export async function getSupportJobPhotos(adminUserId: string, jobId: string) {
 export async function getSupportJobPayments(adminUserId: string, jobId: string) {
   const job = await resolveAndAudit(adminUserId, jobId, 'payments')
   return getJobPayments(jobId, job.ownerUserId)
+}
+
+export async function getSupportJobMoney(adminUserId: string, jobId: string) {
+  const job = await resolveAndAudit(adminUserId, jobId, 'money')
+  return getJobMoney(jobId, job.ownerUserId)
 }
 
 export async function getSupportJobPhotoFile(

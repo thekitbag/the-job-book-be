@@ -26,6 +26,7 @@ vi.mock('../src/db/client.js', () => ({
     transcript: { deleteMany: vi.fn() },
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
     jobPayment: { findMany: vi.fn() },
+    jobMoneyEvent: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
     queueItem: { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn() },
     $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
       const { prisma } = await import('../src/db/client.js')
@@ -90,6 +91,7 @@ beforeEach(async () => {
   vi.mocked(prisma.memoryItem.update as any).mockImplementation(async ({ data }: any) => ({
     ...makeMemory(), ...data, sourceFact: null,
   }))
+  vi.mocked(prisma.jobMoneyEvent.create as any).mockResolvedValue({ id: 'money-new' })
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(null)
@@ -128,6 +130,24 @@ describe('POST return — partial return', () => {
     expect(updateCall.data.quantity).toBe('2')
     expect('isRemoved' in updateCall.data).toBe(false)
     expect(body.remainingLeftoverItem.quantity).toBe('2')
+  })
+})
+
+describe('POST return — Money in refund event', () => {
+  it('creates one REFUND Money in event linked to the returned item for a trusted GBP refund', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(makeMemory({ quantity: '6' }))
+    await post({ quantity: '4', refundAmount: '80', refundCurrency: 'GBP' })
+    const calls = vi.mocked((prisma as any).jobMoneyEvent.create).mock.calls
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0].data).toMatchObject({ direction: 'IN', kind: 'REFUND', amount: '80', currency: 'GBP', sourceMemoryItemId: 'ret-new' })
+  })
+
+  it('creates no Money event when the return records no trusted refund', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(makeMemory({ quantity: '6' }))
+    await post({ quantity: '4' })
+    expect((prisma as any).jobMoneyEvent.create).not.toHaveBeenCalled()
   })
 })
 

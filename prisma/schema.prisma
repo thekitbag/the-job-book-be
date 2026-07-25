@@ -66,8 +66,49 @@ model Job {
   budgetCategories JobBudgetCategory[]
   photos           JobPhoto[]
   payments         JobPayment[]
+  moneyEvents      JobMoneyEvent[]
 
   @@map("jobs")
+}
+
+// Money In/Out: actual money movement, kept distinct from Budget (committed
+// cost). Customer payments stay in JobPayment (projected as Money in); this
+// table holds the movements that are NOT customer payments — a merchant refund
+// (REFUND/IN, linked to the returned material) and a marked-paid Budget cost
+// (COST_PAID/OUT, linked to the paid item). Marking paid never mutates the
+// source item or Budget totals. Soft-deletable for corrections.
+enum JobMoneyDirection {
+  IN
+  OUT
+}
+
+enum JobMoneyKind {
+  REFUND
+  COST_PAID
+}
+
+model JobMoneyEvent {
+  id                 String            @id @default(uuid())
+  jobId              String
+  direction          JobMoneyDirection
+  kind               JobMoneyKind
+  amount             String
+  currency           String            @default("GBP")
+  occurredAt         DateTime
+  note               String?
+  reference          String?
+  sourceMemoryItemId String?
+  isDeleted          Boolean           @default(false)
+  deletedAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id])
+
+  @@index([jobId, occurredAt])
+  @@index([jobId, isDeleted])
+  @@index([jobId, sourceMemoryItemId])
+  @@map("job_money_events")
 }
 
 enum JobStatus {
