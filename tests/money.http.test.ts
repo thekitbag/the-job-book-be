@@ -153,7 +153,7 @@ describe('POST /api/jobs/:jobId/money/out — mark paid', () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(makeMemItem({
       id: 'mem-lab', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', labourHours: '8',
-      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP',
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true,
     }))
     const res = await app.inject({ method: 'POST', url: OUT_URL, headers, payload: { sourceMemoryItemId: 'mem-lab' } })
     expect(res.statusCode).toBe(200)

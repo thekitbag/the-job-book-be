@@ -25,6 +25,7 @@ vi.mock('../src/db/client.js', () => ({
     jobPhoto: { findMany: vi.fn(), findFirst: vi.fn() },
     jobPayment: { findMany: vi.fn() },
     jobMoneyEvent: { findMany: vi.fn() },
+    labourPerson: { findMany: vi.fn() },
     queueItem: { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
     supportAuditEvent: { create: vi.fn(), findFirst: vi.fn() },
   },
@@ -95,6 +96,7 @@ beforeEach(async () => {
   vi.mocked(prisma.queueItem.findMany as any).mockResolvedValue([])
   vi.mocked((prisma as any).jobPayment.findMany).mockResolvedValue([])
   vi.mocked((prisma as any).jobMoneyEvent.findMany).mockResolvedValue([])
+  vi.mocked((prisma as any).labourPerson.findMany).mockResolvedValue([])
   vi.mocked((prisma as any).supportAuditEvent.create).mockImplementation(async ({ data }: any) => ({ id: 'audit-1', createdAt: new Date(), ...data }))
   vi.mocked((prisma as any).supportAuditEvent.findFirst).mockResolvedValue(null)
 })
@@ -408,6 +410,34 @@ describe('GET /api/internal/support/jobs/:jobId/money', () => {
     expect(res.statusCode).toBe(403)
     for (const method of ['POST', 'PATCH', 'DELETE'] as const) {
       const write = await app.inject({ method, url: `/api/internal/support/jobs/${JOB_ID}/money`, headers: { ...asAdmin, 'content-type': 'application/json' }, payload: {} })
+      expect([404, 405], method).toContain(write.statusCode)
+    }
+  })
+})
+
+describe('GET /api/internal/support/jobs/:jobId/labour-people', () => {
+  it('returns the labour people list for the target user and audits the read', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked((prisma as any).labourPerson.findMany).mockResolvedValue([{
+      id: 'sup-person-1', ownerUserId: 'pilot-user', name: 'Kurt', normalizedName: 'kurt',
+      defaultHourlyRateAmount: '20', defaultHourlyRateCurrency: 'GBP', defaultBudgetTreatment: 'COUNTS_TOWARD_BUDGET',
+      isArchived: false, createdAt: new Date(), updatedAt: new Date(),
+    }])
+    const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/labour-people`, headers: asAdmin })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().people[0]).toMatchObject({ id: 'sup-person-1', name: 'Kurt', defaultBudgetTreatment: 'counts_toward_budget' })
+
+    const actions = await auditActions()
+    expect(actions).toContainEqual(expect.objectContaining({
+      action: 'support_view_as_started', targetJobId: JOB_ID, metadata: { route: 'labour-people' },
+    }))
+  })
+
+  it('is refused for non-internal users and exposes no write methods', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/labour-people`, headers: asPilot })
+    expect(res.statusCode).toBe(403)
+    for (const method of ['POST', 'PATCH', 'DELETE'] as const) {
+      const write = await app.inject({ method, url: `/api/internal/support/jobs/${JOB_ID}/labour-people`, headers: { ...asAdmin, 'content-type': 'application/json' }, payload: {} })
       expect([404, 405], method).toContain(write.statusCode)
     }
   })

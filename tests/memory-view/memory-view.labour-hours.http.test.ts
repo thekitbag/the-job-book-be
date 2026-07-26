@@ -157,7 +157,7 @@ describe('memory-view — labourHoursSummary', () => {
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       makeLabourMemoryItem({
         id: 'lab-rated', labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
-        costAmount: '35', costCurrency: 'GBP', costQualifier: 'per_hour', totalCostAmount: '280',
+        costAmount: '35', costCurrency: 'GBP', costQualifier: 'per_hour', totalCostAmount: '280', labourBudgetEnabled: true,
       }),
       makeLabourMemoryItem({ id: 'lab-hours-only' }),
     ])

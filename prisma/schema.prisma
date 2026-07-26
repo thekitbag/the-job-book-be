@@ -21,8 +21,37 @@ model User {
   passwordResetTokens PasswordResetToken[]
   uploadedPhotos      JobPhoto[]
   supportAuditEvents  SupportAuditEvent[]
+  labourPeople        LabourPerson[]
 
   @@map("users")
+}
+
+// Lightweight, user-owned labour people (reusable across jobs). Deliberately NOT
+// payroll/staff management: no accounts, permissions, employment or scheduling
+// data — just who usually worked, an optional assumed rate, and whether that
+// person's labour normally counts toward Budget.
+enum LabourBudgetTreatment {
+  COUNTS_TOWARD_BUDGET
+  HOURS_ONLY
+}
+
+model LabourPerson {
+  id                        String                @id @default(uuid())
+  ownerUserId               String
+  name                      String
+  normalizedName            String
+  defaultHourlyRateAmount   String?
+  defaultHourlyRateCurrency String?
+  defaultBudgetTreatment    LabourBudgetTreatment @default(HOURS_ONLY)
+  isArchived                Boolean               @default(false)
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+
+  owner User @relation(fields: [ownerUserId], references: [id])
+
+  @@index([ownerUserId, normalizedName])
+  @@index([ownerUserId, isArchived])
+  @@map("labour_people")
 }
 
 model PasswordResetToken {
@@ -335,6 +364,13 @@ model MemoryItem {
   labourHours           String?
   labourPerson          String?
   labourTask            String?
+  // Labour people + per-entry Budget rules. labourPersonId links a labour entry
+  // to a lightweight LabourPerson. labourBudgetEnabled === true means this entry
+  // may contribute to Budget when it has trusted GBP cost; false = hours-only
+  // (never Budget cost, even if a rate is stored for reference); null is a
+  // legacy/migration-only state treated conservatively as not-budget.
+  labourPersonId        String?
+  labourBudgetEnabled   Boolean?
   happenedAt            DateTime?
   unresolvedFlags       String[] @default([])
   budgetCategoryId      String?

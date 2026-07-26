@@ -8,6 +8,7 @@ import {
   validateMemoryTargetType,
   validateBudgetCategoryRef,
   validateOptionalIsoDate,
+  validateOptionalBoolean,
 } from '../lib/request-validation.js'
 
 const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
@@ -36,6 +37,8 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       action?: string
       uncertaintyResolution?: string
       budgetCategoryId?: string | null
+      labourPersonId?: string | null
+      labourBudgetEnabled?: boolean | null
       corrected?: {
         memoryType?: string
         summary?: string
@@ -52,6 +55,8 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         labourHours?: string | null
         labourPerson?: string | null
         labourTask?: string | null
+        labourPersonId?: string | null
+        labourBudgetEnabled?: boolean | null
         happenedAt?: string | null
         budgetCategoryId?: string | null
       }
@@ -77,8 +82,16 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
     const sharedError =
       validateOptionalUncertaintyResolution(body.uncertaintyResolution) ??
       ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null) ??
+      ('labourPersonId' in body ? validateBudgetCategoryRef(body.labourPersonId, 'labourPersonId') : null) ??
+      ('labourBudgetEnabled' in body ? validateOptionalBoolean(body.labourBudgetEnabled, 'labourBudgetEnabled') : null) ??
       (body.corrected && 'budgetCategoryId' in body.corrected
         ? validateBudgetCategoryRef(body.corrected.budgetCategoryId, 'corrected.budgetCategoryId')
+        : null) ??
+      (body.corrected && 'labourPersonId' in body.corrected
+        ? validateBudgetCategoryRef(body.corrected.labourPersonId, 'corrected.labourPersonId')
+        : null) ??
+      (body.corrected && 'labourBudgetEnabled' in body.corrected
+        ? validateOptionalBoolean(body.corrected.labourBudgetEnabled, 'corrected.labourBudgetEnabled')
         : null)
     if (sharedError) return reply.code(400).send(sharedError)
 
@@ -101,6 +114,8 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
         action: body.action as 'confirm' | 'correct' | 'dismiss',
         uncertaintyResolution: body.uncertaintyResolution as 'resolved' | 'still_unsure' | undefined,
         budgetCategoryId: body.budgetCategoryId,
+        labourPersonId: body.labourPersonId,
+        labourBudgetEnabled: body.labourBudgetEnabled,
         corrected: body.corrected as never,
         reason: body.reason,
       })
@@ -114,6 +129,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       if (e.code === ErrorCode.QUEUE_ITEM_CONFIRM_NOT_ALLOWED) return reply.code(409).send(e)
       if (e.code === ErrorCode.BUDGET_CATEGORY_NOT_FOUND) return reply.code(404).send(e)
       if (e.code === ErrorCode.BUDGET_CATEGORY_ARCHIVED) return reply.code(400).send(e)
+      if (e.code === ErrorCode.LABOUR_PERSON_NOT_FOUND) return reply.code(404).send(e)
       if (e.code === ErrorCode.INVALID_FIELD) return reply.code(400).send(e)
       throw err
     }

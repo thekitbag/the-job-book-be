@@ -377,7 +377,7 @@ describe('budget-summary and memory-view agree on job-level known cost', () => {
       makeMemory({ id: 'cat', budgetCategoryId: CAT_ID, totalCostAmount: '1850', costCurrency: 'GBP' }),
       makeMemory({ id: 'unc', budgetCategoryId: null, totalCostAmount: '320', costCurrency: 'GBP' }),
       // labour: explicit total contributes; hours-only does not
-      makeMemory({ id: 'lab-paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+      makeMemory({ id: 'lab-paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true }),
       makeMemory({ id: 'lab-hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
       makeMemory({ id: 'missing', totalCostAmount: null }),
       makeMemory({ id: 'unresolved', totalCostAmount: '99', unresolvedFlags: ['cost_uncertain'] }),
@@ -537,7 +537,7 @@ describe('budget-summary — labour', () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true }),
       makeMemory({ id: 'hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
     ])
     const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
@@ -550,7 +550,7 @@ describe('budget-summary — labour', () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.jobBudgetCategory.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP' }),
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true }),
     ])
     const res = await app.inject({ method: 'GET', url: SUMMARY_URL, headers })
     const row = res.json<{ uncategorized: { rows: Array<Record<string, unknown>> } }>().uncategorized.rows[0]
@@ -570,7 +570,7 @@ describe('memory-view — labour cost summary', () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
       makeMemory({ id: 'ord', totalCostAmount: '100', costCurrency: 'GBP' }),
-      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'roof', totalCostAmount: '600', costCurrency: 'GBP' }),
+      makeMemory({ id: 'paid', memoryType: 'LABOUR', materialName: null, labourTask: 'roof', totalCostAmount: '600', costCurrency: 'GBP', labourBudgetEnabled: true }),
       makeMemory({ id: 'hours', memoryType: 'LABOUR', materialName: null, labourHours: '6', labourTask: 'cladding', totalCostAmount: null, costCurrency: null }),
     ])
     const res = await app.inject({ method: 'GET', url: MV, headers })
@@ -665,6 +665,7 @@ function makeLabourMemory(overrides?: object) {
     labourHours: '8',
     labourPerson: 'Tom',
     labourTask: 'electrics',
+    labourBudgetEnabled: true,
     ...overrides,
   })
 }
@@ -800,7 +801,7 @@ describe('labour/budget invariants — historical Labour-category spend', () => 
     return makeMemory({
       id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom did 8 hours at £35/hr',
       labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
-      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', ...overrides,
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true, ...overrides,
     })
   }
 
@@ -885,7 +886,7 @@ describe('labour budget anchor — Labour category lifecycle in budgetSummary.la
     return makeMemory({
       id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom did 8 hours at £35/hr',
       labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
-      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP',
+      costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true,
     })
   }
 
