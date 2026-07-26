@@ -16,7 +16,11 @@
 import { strictParsePositive, formatLineTotalLabel, resolveSpendItemLabel } from './cost-utils.js'
 import { isSpendMemoryType } from './memory-types.js'
 
-export type SpendExclusionReason = 'no_cost_remembered' | 'no_rate_or_cost' | 'cost_worth_checking'
+export type SpendExclusionReason =
+  | 'no_cost_remembered'
+  | 'no_rate_or_cost'
+  | 'cost_worth_checking'
+  | 'labour_hours_only'
 
 // The memory-item fields the classifier reads. Matches the Prisma MemoryItem row.
 export interface SpendClassifiable {
@@ -32,6 +36,9 @@ export interface SpendClassifiable {
   costAmount: string | null
   costCurrency: string | null
   totalCostAmount: string | null
+  // Labour people/budget rules: labour contributes to Budget only when explicitly
+  // budget-enabled. Absent/null (legacy) and false are treated as hours-only.
+  labourBudgetEnabled?: boolean | null
   unresolvedFlags: string[]
   budgetCategoryId?: string | null
 }
@@ -100,6 +107,13 @@ export function classifySpend(item: SpendClassifiable): SpendClassification {
     item.costCurrency !== 'GBP'
   ) {
     return { kind: 'excluded', row: { ...itemFacts(item), reason: 'cost_worth_checking' } }
+  }
+
+  // Labour has a trusted GBP cost, but it only counts toward Budget when the
+  // entry is explicitly budget-enabled. Hours-only labour stays visible in Labour
+  // (and its hours still count) but is excluded from Budget cost and Money out.
+  if (item.memoryType === 'LABOUR' && item.labourBudgetEnabled !== true) {
+    return { kind: 'excluded', row: { ...itemFacts(item), reason: 'labour_hours_only' } }
   }
 
   return {

@@ -12,8 +12,18 @@ import {
   isValidDecimalString,
   validateOptionalGbpCurrency,
   validateOptionalIsoDate,
+  validateOptionalBoolean,
 } from '../lib/request-validation.js'
 import type { ValidationError } from '../lib/request-validation.js'
+
+// Shared labour person/budget field validation (create + patch): labourPersonId
+// is a string (link) or null (unlink); labourBudgetEnabled is a boolean.
+function labourEntryFieldsError(body: { labourPersonId?: unknown; labourBudgetEnabled?: unknown }): ValidationError | null {
+  return (
+    ('labourPersonId' in body ? validateBudgetCategoryRef(body.labourPersonId, 'labourPersonId') : null) ??
+    ('labourBudgetEnabled' in body ? validateOptionalBoolean(body.labourBudgetEnabled, 'labourBudgetEnabled') : null)
+  )
+}
 
 // Runs the shared field validators that apply to both create and patch bodies;
 // returns the first error, or null when every present field is acceptable.
@@ -22,6 +32,8 @@ function memoryFieldsError(body: {
   totalCostAmount?: unknown
   labourHours?: unknown
   costQualifier?: unknown
+  labourPersonId?: unknown
+  labourBudgetEnabled?: unknown
   budgetCategoryId?: unknown
 }): ValidationError | null {
   return (
@@ -29,6 +41,7 @@ function memoryFieldsError(body: {
     validateOptionalDecimal(body.totalCostAmount, 'totalCostAmount') ??
     validateOptionalDecimal(body.labourHours, 'labourHours') ??
     validateOptionalCostQualifier(body.costQualifier) ??
+    labourEntryFieldsError(body) ??
     ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null)
   )
 }
@@ -54,6 +67,8 @@ interface CreateBody {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  labourPersonId?: string | null
+  labourBudgetEnabled?: boolean | null
   budgetCategoryId?: string | null
 }
 
@@ -98,6 +113,8 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       labourHours?: string | null
       labourPerson?: string | null
       labourTask?: string | null
+      labourPersonId?: string | null
+      labourBudgetEnabled?: boolean | null
       happenedAt?: string | null
       uncertaintyResolution?: string
       budgetCategoryId?: string | null
@@ -106,11 +123,12 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     const { jobId, memoryItemId } = request.params
     const body = request.body ?? {}
 
-    // A category-only change carries budgetCategoryId and no memoryType; it must
-    // update only the assignment and leave existing memory fields untouched.
+    // A light change carries no memoryType and updates only the budget category
+    // and/or the labour person link / Budget treatment, leaving other memory
+    // fields untouched.
     if (body.memoryType == null) {
-      if (!('budgetCategoryId' in body)) {
-        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType or budgetCategoryId is required' })
+      if (!('budgetCategoryId' in body) && !('labourPersonId' in body) && !('labourBudgetEnabled' in body)) {
+        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType, budgetCategoryId, labourPersonId, or labourBudgetEnabled is required' })
       }
     } else {
       const typeError = validateMemoryTargetType(body.memoryType)
@@ -123,6 +141,7 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       validateOptionalDecimal(body.totalCostAmount, 'totalCostAmount') ??
       validateOptionalCostQualifier(body.costQualifier) ??
       validateOptionalDecimal(body.labourHours, 'labourHours') ??
+      labourEntryFieldsError(body) ??
       validateOptionalUncertaintyResolution(body.uncertaintyResolution) ??
       ('budgetCategoryId' in body ? validateBudgetCategoryRef(body.budgetCategoryId) : null)
     if (error) return sendError(reply, error)

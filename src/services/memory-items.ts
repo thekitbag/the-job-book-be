@@ -14,6 +14,7 @@ import { assertAssignableCategory } from './budget.js'
 import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
 import { ukLocalNoon } from '../lib/dates.js'
 import { refundMoneyEventData } from './money.js'
+import { requireOwnedLabourPerson } from './labour-people.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -50,9 +51,41 @@ export interface MemoryItemPatch {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  labourPersonId?: string | null
+  labourBudgetEnabled?: boolean | null
   happenedAt?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
   budgetCategoryId?: string | null
+}
+
+// Resolve the labourPersonId + labourBudgetEnabled to persist on a patch, without
+// applying person defaults (a plain person change must not silently rewrite cost
+// or Budget treatment — the caller sends those explicitly). Off-labour memory
+// never carries these fields. Validates person ownership when a link is set.
+async function resolveLabourEntryPatch(
+  userId: string,
+  finalIsLabour: boolean,
+  patch: MemoryItemPatch,
+  existing: { labourPersonId: string | null; labourBudgetEnabled: boolean | null },
+): Promise<{ labourPersonId: string | null; labourBudgetEnabled: boolean | null }> {
+  if (!finalIsLabour) return { labourPersonId: null, labourBudgetEnabled: null }
+
+  let labourPersonId = existing.labourPersonId
+  if ('labourPersonId' in patch) {
+    if (patch.labourPersonId == null) {
+      labourPersonId = null
+    } else {
+      const person = await requireOwnedLabourPerson(userId, patch.labourPersonId)
+      labourPersonId = person.id
+    }
+  }
+
+  let labourBudgetEnabled = existing.labourBudgetEnabled
+  if ('labourBudgetEnabled' in patch) {
+    labourBudgetEnabled = patch.labourBudgetEnabled ?? null
+  }
+
+  return { labourPersonId, labourBudgetEnabled }
 }
 
 export async function patchMemoryItem(
@@ -93,12 +126,23 @@ export async function patchMemoryItem(
     budgetCategoryId = null
   }
 
-  // Category-only change: no memoryType means update budgetCategoryId alone and
-  // leave every existing memory field untouched.
+  const finalIsLabour = finalMemoryType === 'LABOUR'
+  // labourBudgetEnabled is meaningful only for labour memory.
+  if ('labourBudgetEnabled' in patch && patch.labourBudgetEnabled != null && !finalIsLabour) {
+    throw { code: ErrorCode.INVALID_FIELD, message: 'labourBudgetEnabled is only allowed on labour memory' }
+  }
+
+  // Light change: no memoryType means update only the budget category and/or the
+  // labour person link / Budget treatment, leaving every other memory field
+  // untouched (used by the entry drawer's "counts toward budget" toggle).
   if (patch.memoryType == null) {
+    const touchesLabour = 'labourPersonId' in patch || 'labourBudgetEnabled' in patch
+    const labourData = touchesLabour
+      ? await resolveLabourEntryPatch(userId, finalIsLabour, patch, existing)
+      : {}
     const updated = await prisma.memoryItem.update({
       where: { id: memoryItemId },
-      data: { budgetCategoryId },
+      data: { budgetCategoryId, ...labourData },
       include: {
         sourceFact: {
           include: {
@@ -141,11 +185,14 @@ export async function patchMemoryItem(
   // 'resolved' may not override a freshly detected arithmetic conflict
   const unresolvedFlags = (!conflict && patch.uncertaintyResolution === 'resolved') ? [] : baseFlags
 
+  const labourData = await resolveLabourEntryPatch(userId, finalIsLabour, patch, existing)
+
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
     data: {
       memoryType: patch.memoryType.toUpperCase() as never,
       budgetCategoryId,
+      ...labourData,
       summary: patch.summary ?? existing.summary,
       materialName: 'materialName' in patch ? patch.materialName ?? null : existing.materialName,
       quantity: 'quantity' in patch ? patch.quantity ?? null : existing.quantity,
@@ -412,6 +459,8 @@ function normalizeMemoryItem(
     labourHours: string | null
     labourPerson: string | null
     labourTask: string | null
+    labourPersonId: string | null
+    labourBudgetEnabled: boolean | null
     happenedAt: Date | null
     isManual: boolean
     unresolvedFlags: string[]
@@ -450,6 +499,8 @@ function normalizeMemoryItem(
     labourHours: item.labourHours,
     labourPerson: item.labourPerson,
     labourTask: item.labourTask,
+    labourPersonId: item.labourPersonId,
+    labourBudgetEnabled: item.labourBudgetEnabled,
     happenedAt: item.happenedAt,
     isManual: item.isManual,
     budgetCategoryId: item.budgetCategoryId,
@@ -496,6 +547,8 @@ export interface CreateMemoryItemInput {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  labourPersonId?: string | null
+  labourBudgetEnabled?: boolean | null
   budgetCategoryId?: string | null
 }
 
@@ -537,20 +590,54 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   await verifyJobOwnership(jobId, userId)
 
   const memoryType = input.memoryType.toUpperCase()
+  const isLabour = memoryType === 'LABOUR'
 
-  const summary = deriveManualSummary(input)
+  // Labour person + Budget-treatment defaulting (new labour entries only). A
+  // selected person can fill in the assumed rate, the person's display name, and
+  // the default Budget treatment when the request omits them; a request that
+  // sends those fields always wins. No person/default → hours-only, never hidden
+  // Budget cost.
+  let personId: string | null = null
+  let effCostAmount = input.costAmount
+  let effCostCurrency = input.costCurrency
+  let effCostQualifier = input.costQualifier
+  let effLabourPerson = input.labourPerson
+  let labourBudgetEnabled: boolean | null = null
+  if (isLabour) {
+    const person = input.labourPersonId ? await requireOwnedLabourPerson(userId, input.labourPersonId) : null
+    personId = person?.id ?? null
+
+    const rateOmitted = !('costAmount' in input) && !('totalCostAmount' in input)
+    if (person && rateOmitted && person.defaultHourlyRateAmount) {
+      effCostAmount = person.defaultHourlyRateAmount
+      effCostCurrency = 'GBP'
+      effCostQualifier = 'per_hour'
+    }
+    if (person && (effLabourPerson == null || effLabourPerson.trim() === '')) {
+      effLabourPerson = person.name
+    }
+    if (input.labourBudgetEnabled === true || input.labourBudgetEnabled === false) {
+      labourBudgetEnabled = input.labourBudgetEnabled
+    } else if (person) {
+      labourBudgetEnabled = person.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
+    } else {
+      labourBudgetEnabled = false
+    }
+  }
+
+  const summary = deriveManualSummary({ ...input, labourPerson: effLabourPerson })
   if (!summary) throw { code: ErrorCode.MISSING_FIELD, message: 'summary is required' }
 
   const happenedAt = parseHappenedAt(input.happenedAt)
 
   // Default currency to GBP when a cost is present but currency omitted.
-  let costCurrency = input.costCurrency ?? null
-  if (!costCurrency && (input.costAmount || input.totalCostAmount)) costCurrency = 'GBP'
+  let costCurrency = effCostCurrency ?? null
+  if (!costCurrency && (effCostAmount || input.totalCostAmount)) costCurrency = 'GBP'
 
   // A stated total (costQualifier 'total') means costAmount is itself the total.
   const totalFromTotalQualifier =
-    input.costQualifier === 'total' && input.costAmount && STRICT_DECIMAL_RE.test(input.costAmount)
-      ? input.costAmount
+    effCostQualifier === 'total' && effCostAmount && STRICT_DECIMAL_RE.test(effCostAmount)
+      ? effCostAmount
       : null
 
   // Preserve an explicit total, else derive from stated total, material each, or
@@ -558,12 +645,12 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   const totalCostAmount =
     input.totalCostAmount ??
     totalFromTotalQualifier ??
-    deriveSafeMaterialTotal(input.quantity, input.unit, input.costAmount, costCurrency, input.costQualifier) ??
-    deriveSafeLabourTotal(input.labourHours, input.costAmount, input.costQualifier) ??
+    deriveSafeMaterialTotal(input.quantity, input.unit, effCostAmount, costCurrency, effCostQualifier) ??
+    deriveSafeLabourTotal(input.labourHours, effCostAmount, effCostQualifier) ??
     null
 
   const unresolvedFlags =
-    hasCostConflict(input.quantity, input.costAmount, input.costQualifier, totalCostAmount)
+    hasCostConflict(input.quantity, effCostAmount, effCostQualifier, totalCostAmount)
       ? ['cost_uncertain']
       : []
 
@@ -605,13 +692,15 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
         supplierName: input.supplierName ?? null,
         deliveryTiming: input.deliveryTiming ?? null,
         locationOrUse: input.locationOrUse ?? null,
-        costAmount: input.costAmount ?? null,
+        costAmount: effCostAmount ?? null,
         costCurrency,
-        costQualifier: input.costQualifier ?? null,
+        costQualifier: effCostQualifier ?? null,
         totalCostAmount,
         labourHours: input.labourHours ?? null,
-        labourPerson: input.labourPerson ?? null,
+        labourPerson: effLabourPerson ?? null,
         labourTask: input.labourTask ?? null,
+        labourPersonId: personId,
+        labourBudgetEnabled,
         happenedAt,
         unresolvedFlags,
         budgetCategoryId,

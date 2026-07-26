@@ -27,6 +27,7 @@ vi.mock('../src/db/client.js', () => ({
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
     jobPhoto: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
     jobPayment: { findMany: vi.fn() },
+    labourPerson: { findMany: vi.fn() },
     queueItem: { findMany: vi.fn() },
   },
 }))
@@ -76,6 +77,7 @@ beforeEach(async () => {
   vi.mocked((prisma.memoryItem as any).update).mockImplementation(async ({ data }: any) => ({ ...makeMemory(), ...data, sourceFact: null }))
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findMany as any).mockResolvedValue([])
+  vi.mocked(prisma.labourPerson.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(null)
   vi.mocked((prisma as any).jobPhoto.findMany).mockResolvedValue([])
   vi.mocked((prisma as any).jobPhoto.findFirst).mockResolvedValue(null)
@@ -160,7 +162,7 @@ describe('active reads exclude removed memory items', () => {
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       makeMemory({
         id: 'mem-labour', memoryType: 'LABOUR', materialName: null, summary: 'Tom 8h at £35/hr',
-        labourHours: '8', labourPerson: 'Tom', costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280',
+        labourHours: '8', labourPerson: 'Tom', costAmount: '35', costQualifier: 'per_hour', totalCostAmount: '280', costCurrency: 'GBP', labourBudgetEnabled: true,
       }),
     ])
     const view = (await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/memory-view`, headers: authHeaders })).json()

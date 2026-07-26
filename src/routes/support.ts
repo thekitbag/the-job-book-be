@@ -15,6 +15,7 @@ import {
   getSupportJobPhotoFile,
   getSupportJobPayments,
   getSupportJobMoney,
+  getSupportJobLabourPeople,
 } from '../services/support.js'
 import { handleServiceError } from './jobs.js'
 
@@ -134,6 +135,18 @@ const supportRoutes: FastifyPluginAsync<SupportRouteOptions> = async (fastify, o
       if (refuseNonInternal(request, reply)) return
       try {
         return reply.send(await getSupportJobMoney(request.userId, request.params.jobId))
+      } catch (err: unknown) {
+        return handleServiceError(err, reply)
+      }
+    },
+  )
+
+  fastify.get<{ Params: { jobId: string } }>(
+    '/api/internal/support/jobs/:jobId/labour-people',
+    async (request, reply) => {
+      if (refuseNonInternal(request, reply)) return
+      try {
+        return reply.send(await getSupportJobLabourPeople(request.userId, request.params.jobId))
       } catch (err: unknown) {
         return handleServiceError(err, reply)
       }

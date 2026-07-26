@@ -38,6 +38,7 @@ export function createReviewQueuePrismaMock() {
     candidateFact: { findMany: vi.fn(), updateMany: vi.fn() },
     reviewDecision: { create: vi.fn() },
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
+    labourPerson: { findMany: vi.fn(), findFirst: vi.fn() },
     memoryItem: { create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     queueItem: {
       deleteMany: vi.fn(),
@@ -68,6 +69,8 @@ export async function resetReviewQueueMocks() {
   vi.mocked(prisma.reviewDecision.create as any).mockResolvedValue({ id: DECISION_ID })
   vi.mocked(prisma.jobBudgetCategory.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(null)
+  vi.mocked(prisma.labourPerson.findMany as any).mockResolvedValue([])
+  vi.mocked(prisma.labourPerson.findFirst as any).mockResolvedValue(null)
   vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.memoryItem.create as any).mockImplementation(async ({ data }: any) => ({
     ...makeMemoryItem(),

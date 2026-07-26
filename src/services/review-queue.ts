@@ -13,7 +13,56 @@ import {
   suggestBudgetCategory,
   assertAssignableCategory,
 } from './budget.js'
+import {
+  getActiveLabourPeople,
+  matchLabourPersonByName,
+  normalizeLabourPerson,
+  toApiTreatment,
+  type ApiBudgetTreatment,
+} from './labour-people.js'
 import { MEMORY_TYPES, isCategoryAssignableApiMemoryType } from '../lib/memory-types.js'
+
+type ActiveLabourPerson = Awaited<ReturnType<typeof getActiveLabourPeople>>[number]
+
+// Resolve the labourPersonId + labourBudgetEnabled + display name to persist when
+// a labour draft is confirmed/corrected. An explicit chosen person id wins;
+// otherwise the entry's person text is matched to an active person by exact name.
+// Budget treatment: an explicit value wins, else the matched person's default,
+// else hours-only. Person defaults never rewrite cost fields here (the reviewer
+// sends corrected cost explicitly). Non-labour carries none of these.
+function resolveLabourDecision(
+  activePeople: ActiveLabourPerson[],
+  opts: {
+    isLabour: boolean
+    personText: string | null | undefined
+    personIdProvided: boolean
+    personId: string | null | undefined
+    budgetEnabledProvided: boolean
+    budgetEnabled: boolean | null | undefined
+  },
+): { labourPersonId: string | null; labourBudgetEnabled: boolean | null; labourPerson: string | null } {
+  if (!opts.isLabour) {
+    return { labourPersonId: null, labourBudgetEnabled: null, labourPerson: opts.personText ?? null }
+  }
+  let person: ActiveLabourPerson | null = null
+  if (opts.personIdProvided) {
+    if (opts.personId != null) {
+      person = activePeople.find((p) => p.id === opts.personId) ?? null
+      if (!person) throw { code: ErrorCode.LABOUR_PERSON_NOT_FOUND, message: 'Labour person not found' }
+    }
+  } else {
+    person = matchLabourPersonByName(activePeople, opts.personText)
+  }
+  const labourBudgetEnabled =
+    opts.budgetEnabledProvided && typeof opts.budgetEnabled === 'boolean'
+      ? opts.budgetEnabled
+      : person
+        ? person.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
+        : false
+  const labourPerson =
+    opts.personText && opts.personText.trim() !== '' ? opts.personText : person ? person.name : opts.personText ?? null
+  return { labourPersonId: person?.id ?? null, labourBudgetEnabled, labourPerson }
+}
 
 // ── Section configuration ─────────────────────────────────────────────────────
 
@@ -65,6 +114,9 @@ interface ProposedMemory {
   labourPerson: string | null
   labourTask: string | null
   happenedAt: string | null
+  // Labour people enrichment (added at read time; base draft carries null).
+  labourPersonId: string | null
+  labourBudgetEnabled: boolean | null
 }
 
 interface GroupedItemData {
@@ -121,12 +173,14 @@ export interface CorrectedFields {
   labourHours?: string | null
   labourPerson?: string | null
   labourTask?: string | null
+  labourPersonId?: string | null
+  labourBudgetEnabled?: boolean | null
   happenedAt?: string | null
   budgetCategoryId?: string | null
 }
 
 export type QueueDecisionPayload =
-  | { action: 'confirm'; queueItemId: string; uncertaintyResolution?: 'resolved' | 'still_unsure'; budgetCategoryId?: string | null }
+  | { action: 'confirm'; queueItemId: string; uncertaintyResolution?: 'resolved' | 'still_unsure'; budgetCategoryId?: string | null; labourPersonId?: string | null; labourBudgetEnabled?: boolean | null }
   | { action: 'correct'; queueItemId: string; corrected: CorrectedFields; uncertaintyResolution?: 'resolved' | 'still_unsure'; budgetCategoryId?: string | null }
   | { action: 'dismiss'; queueItemId: string; reason?: string }
 
@@ -178,6 +232,9 @@ function extractProposedMemory(f: FactWithContext): ProposedMemory {
     labourPerson: f.labourPerson,
     labourTask: f.labourTask,
     happenedAt: f.happenedAt ? f.happenedAt.toISOString() : null,
+    // Extraction does not know labour people; enriched at read time.
+    labourPersonId: null,
+    labourBudgetEnabled: null,
   }
 }
 
@@ -432,7 +489,11 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
   // Active categories drive review-time suggestions, recomputed on every GET so a
   // queue item created before categories changed still reflects current categories.
-  const budgetCategories = await getActiveBudgetCategories(jobId)
+  // Active labour people drive labour draft enrichment the same way.
+  const [budgetCategories, activeLabourPeople] = await Promise.all([
+    getActiveBudgetCategories(jobId),
+    getActiveLabourPeople(userId),
+  ])
 
   // Add sourceContext and a (response-only) budget category suggestion to each item.
   const sections = baseSections.map((section) => ({
@@ -443,12 +504,31 @@ export async function getReviewQueue(jobId: string, userId: string) {
         { memoryType: pm.memoryType, materialName: pm.materialName, summary: pm.summary, labourTask: pm.labourTask },
         budgetCategories,
       )
+      // Labour enrichment: an exact-name match to an active person proposes that
+      // person's default rate/treatment. Ambiguous/no match → no inherited person
+      // and hours-only by default. All of this is visible and user-correctable.
+      const inheritedPerson =
+        pm.memoryType === 'labour' ? matchLabourPersonByName(activeLabourPeople, pm.labourPerson) : null
+      const inheritedBudgetTreatment: ApiBudgetTreatment | null =
+        inheritedPerson ? toApiTreatment(inheritedPerson.defaultBudgetTreatment) : null
+      const labourEnrichment =
+        pm.memoryType === 'labour'
+          ? {
+              labourPersonId: inheritedPerson ? inheritedPerson.id : null,
+              labourBudgetEnabled: inheritedPerson
+                ? inheritedPerson.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
+                : false,
+              inheritedLabourPerson: inheritedPerson ? normalizeLabourPerson(inheritedPerson) : null,
+              inheritedBudgetTreatment,
+            }
+          : { labourPersonId: null, labourBudgetEnabled: null, inheritedLabourPerson: null, inheritedBudgetTreatment: null }
       return {
         ...item,
         proposedMemory: {
           ...pm,
           budgetCategoryId: suggestion ? suggestion.budgetCategoryId : null,
           budgetCategorySuggestion: suggestion,
+          ...labourEnrichment,
         },
         sourceContext: item.sourceCandidateFactIds.flatMap((id) => {
           const f = factMap.get(id)
@@ -489,6 +569,8 @@ export async function getReviewQueue(jobId: string, userId: string) {
     labourHours: m.labourHours,
     labourPerson: m.labourPerson,
     labourTask: m.labourTask,
+    labourPersonId: m.labourPersonId,
+    labourBudgetEnabled: m.labourBudgetEnabled,
     happenedAt: m.happenedAt,
     unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
     lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
@@ -497,7 +579,9 @@ export async function getReviewQueue(jobId: string, userId: string) {
     budgetCategoryId: m.budgetCategoryId,
   }))
 
-  return { jobId, generatedAt: now, budgetCategories, sections, alreadyRemembered }
+  const labourPeople = activeLabourPeople.map(normalizeLabourPerson)
+
+  return { jobId, generatedAt: now, budgetCategories, labourPeople, sections, alreadyRemembered }
 }
 
 // ── POST /api/jobs/:jobId/review-queue-decisions ──────────────────────────────
@@ -541,6 +625,18 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
       jobId, pm.memoryType, payload.budgetCategoryId, undefined,
     )
 
+    // Labour person/Budget treatment: an explicit payload choice wins, else the
+    // draft's person text is matched to an active person's defaults.
+    const activeLabourPeople = await getActiveLabourPeople(userId)
+    const confirmLabour = resolveLabourDecision(activeLabourPeople, {
+      isLabour: pm.memoryType === 'labour',
+      personText: pm.labourPerson,
+      personIdProvided: payload.labourPersonId !== undefined,
+      personId: payload.labourPersonId,
+      budgetEnabledProvided: payload.labourBudgetEnabled !== undefined,
+      budgetEnabled: payload.labourBudgetEnabled,
+    })
+
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'confirmed' } })
 
@@ -573,8 +669,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costQualifier: pm.costQualifier,
           totalCostAmount: pm.totalCostAmount,
           labourHours: pm.labourHours,
-          labourPerson: pm.labourPerson,
+          labourPerson: confirmLabour.labourPerson,
           labourTask: pm.labourTask,
+          labourPersonId: confirmLabour.labourPersonId,
+          labourBudgetEnabled: confirmLabour.labourBudgetEnabled,
           happenedAt: pm.happenedAt ? new Date(pm.happenedAt) : null,
           unresolvedFlags,
           budgetCategoryId,
@@ -631,6 +729,18 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     const unresolvedFlags =
       conflict && !baseFlags.includes('cost_uncertain') ? [...baseFlags, 'cost_uncertain'] : baseFlags
 
+    // Labour person/Budget treatment from the corrected fields: explicit choice
+    // wins, else match the corrected person text to an active person's defaults.
+    const activeLabourPeople = await getActiveLabourPeople(userId)
+    const correctLabour = resolveLabourDecision(activeLabourPeople, {
+      isLabour: corrected.memoryType.toLowerCase() === 'labour',
+      personText: corrected.labourPerson,
+      personIdProvided: corrected.labourPersonId !== undefined,
+      personId: corrected.labourPersonId,
+      budgetEnabledProvided: corrected.labourBudgetEnabled !== undefined,
+      budgetEnabled: corrected.labourBudgetEnabled,
+    })
+
     const result = await prisma.$transaction(async (tx) => {
       await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })
 
@@ -663,8 +773,10 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           costQualifier: corrected.costQualifier ?? null,
           totalCostAmount: correctedTotalCostAmount,
           labourHours: corrected.labourHours ?? null,
-          labourPerson: corrected.labourPerson ?? null,
+          labourPerson: correctLabour.labourPerson,
           labourTask: corrected.labourTask ?? null,
+          labourPersonId: correctLabour.labourPersonId,
+          labourBudgetEnabled: correctLabour.labourBudgetEnabled,
           happenedAt: correctedHappenedAt,
           unresolvedFlags,
           budgetCategoryId,

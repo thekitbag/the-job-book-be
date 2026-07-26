@@ -349,6 +349,8 @@ interface LabourHoursSource {
   labourHours: string | null
   labourPerson: string | null
   labourTask: string | null
+  labourPersonId: string | null
+  labourBudgetEnabled: boolean | null
   happenedAt: Date | null
   createdAt: Date
   unresolvedFlags: string[]
@@ -396,6 +398,8 @@ function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifia
           labourTask: m.labourTask,
           labourHours: m.labourHours,
           hoursLabel: m.labourHours ? `${m.labourHours}h` : null,
+          labourPersonId: m.labourPersonId,
+          labourBudgetEnabled: m.labourBudgetEnabled,
           happenedAt: m.happenedAt,
           includedInHourTotal,
           worthChecking,
@@ -592,6 +596,8 @@ export async function getMemoryView(jobId: string, userId: string) {
         labourHours: m.labourHours,
         labourPerson: m.labourPerson,
         labourTask: m.labourTask,
+        labourPersonId: m.labourPersonId,
+        labourBudgetEnabled: m.labourBudgetEnabled,
         happenedAt: m.happenedAt,
         isManual: m.isManual,
         budgetCategoryId: m.budgetCategoryId,

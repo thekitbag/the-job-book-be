@@ -13,6 +13,7 @@ import { listJobPhotos, getJobPhotoFile } from './photos.js'
 import { getJobInspection } from './inspection.js'
 import { getJobPayments } from './payments.js'
 import { getJobMoney } from './money.js'
+import { listLabourPeople } from './labour-people.js'
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,11 @@ export async function getSupportJobPayments(adminUserId: string, jobId: string) 
 export async function getSupportJobMoney(adminUserId: string, jobId: string) {
   const job = await resolveAndAudit(adminUserId, jobId, 'money')
   return getJobMoney(jobId, job.ownerUserId)
+}
+
+export async function getSupportJobLabourPeople(adminUserId: string, jobId: string) {
+  const job = await resolveAndAudit(adminUserId, jobId, 'labour-people')
+  return listLabourPeople(jobId, job.ownerUserId)
 }
 
 export async function getSupportJobPhotoFile(

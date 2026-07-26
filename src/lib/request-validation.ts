@@ -85,6 +85,21 @@ export function validateBudgetCategoryRef(
   return invalid(`${fieldName} must be a string or null`)
 }
 
+export const VALID_BUDGET_TREATMENTS: ReadonlySet<string> = new Set(['counts_toward_budget', 'hours_only'])
+
+// Labour person default budget treatment. `required` controls whether an absent
+// value is an error (create) or acceptable (patch preserve).
+export function validateBudgetTreatment(
+  value: unknown,
+  { required }: { required: boolean },
+): ValidationError | null {
+  if (value == null) return required ? invalid('defaultBudgetTreatment must be counts_toward_budget or hours_only') : null
+  if (typeof value !== 'string' || !VALID_BUDGET_TREATMENTS.has(value)) {
+    return invalid('defaultBudgetTreatment must be counts_toward_budget or hours_only')
+  }
+  return null
+}
+
 // Optional ISO date/time field (happenedAt): null clears, a present string must
 // parse to a valid Date.
 export function validateOptionalIsoDate(value: unknown, fieldName: string): ValidationError | null {
