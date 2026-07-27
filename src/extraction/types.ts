@@ -6,6 +6,7 @@ export type FactType =
   | 'customer_change'
   | 'watch_out'
   | 'labour'
+  | 'budget_cost'
   | 'unclear'
 
 export type ConfidenceLabel = 'high' | 'medium' | 'low'

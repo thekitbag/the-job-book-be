@@ -13,8 +13,9 @@ import {
 import { assertAssignableCategory } from './budget.js'
 import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
 import { ukLocalNoon } from '../lib/dates.js'
-import { refundMoneyEventData } from './money.js'
-import { requireOwnedLabourPerson } from './labour-people.js'
+import { refundMoneyEventData, costPaidMoneyEventData } from './money.js'
+import { requireJobLabourPerson } from './labour-people.js'
+import { classifySpend } from '../lib/spend-classification.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -52,40 +53,32 @@ export interface MemoryItemPatch {
   labourPerson?: string | null
   labourTask?: string | null
   labourPersonId?: string | null
-  labourBudgetEnabled?: boolean | null
   happenedAt?: string | null
   uncertaintyResolution?: 'resolved' | 'still_unsure'
   budgetCategoryId?: string | null
 }
 
-// Resolve the labourPersonId + labourBudgetEnabled to persist on a patch, without
-// applying person defaults (a plain person change must not silently rewrite cost
-// or Budget treatment — the caller sends those explicitly). Off-labour memory
-// never carries these fields. Validates person ownership when a link is set.
+// Resolve the job-local person link on a patch. Changing person never rewrites
+// an entry's rate; a client must explicitly send a rate to apply a new default.
 async function resolveLabourEntryPatch(
-  userId: string,
+  jobId: string,
   finalIsLabour: boolean,
   patch: MemoryItemPatch,
-  existing: { labourPersonId: string | null; labourBudgetEnabled: boolean | null },
-): Promise<{ labourPersonId: string | null; labourBudgetEnabled: boolean | null }> {
-  if (!finalIsLabour) return { labourPersonId: null, labourBudgetEnabled: null }
+  existing: { labourPersonId: string | null },
+): Promise<{ labourPersonId: string | null }> {
+  if (!finalIsLabour) return { labourPersonId: null }
 
   let labourPersonId = existing.labourPersonId
   if ('labourPersonId' in patch) {
     if (patch.labourPersonId == null) {
       labourPersonId = null
     } else {
-      const person = await requireOwnedLabourPerson(userId, patch.labourPersonId)
+      const person = await requireJobLabourPerson(jobId, patch.labourPersonId)
       labourPersonId = person.id
     }
   }
 
-  let labourBudgetEnabled = existing.labourBudgetEnabled
-  if ('labourBudgetEnabled' in patch) {
-    labourBudgetEnabled = patch.labourBudgetEnabled ?? null
-  }
-
-  return { labourPersonId, labourBudgetEnabled }
+  return { labourPersonId }
 }
 
 export async function patchMemoryItem(
@@ -127,18 +120,13 @@ export async function patchMemoryItem(
   }
 
   const finalIsLabour = finalMemoryType === 'LABOUR'
-  // labourBudgetEnabled is meaningful only for labour memory.
-  if ('labourBudgetEnabled' in patch && patch.labourBudgetEnabled != null && !finalIsLabour) {
-    throw { code: ErrorCode.INVALID_FIELD, message: 'labourBudgetEnabled is only allowed on labour memory' }
-  }
-
   // Light change: no memoryType means update only the budget category and/or the
   // labour person link / Budget treatment, leaving every other memory field
   // untouched (used by the entry drawer's "counts toward budget" toggle).
   if (patch.memoryType == null) {
-    const touchesLabour = 'labourPersonId' in patch || 'labourBudgetEnabled' in patch
+    const touchesLabour = 'labourPersonId' in patch
     const labourData = touchesLabour
-      ? await resolveLabourEntryPatch(userId, finalIsLabour, patch, existing)
+      ? await resolveLabourEntryPatch(jobId, finalIsLabour, patch, existing)
       : {}
     const updated = await prisma.memoryItem.update({
       where: { id: memoryItemId },
@@ -185,7 +173,16 @@ export async function patchMemoryItem(
   // 'resolved' may not override a freshly detected arithmetic conflict
   const unresolvedFlags = (!conflict && patch.uncertaintyResolution === 'resolved') ? [] : baseFlags
 
-  const labourData = await resolveLabourEntryPatch(userId, finalIsLabour, patch, existing)
+  const labourData = await resolveLabourEntryPatch(jobId, finalIsLabour, patch, existing)
+
+  const costChanged =
+    effCostAmount !== existing.costAmount || effCostCurrency !== existing.costCurrency ||
+    effCostQualifier !== existing.costQualifier || effLabourHours !== existing.labourHours ||
+    finalTotalCostAmount !== existing.totalCostAmount
+  if (finalIsLabour && costChanged && prisma.jobMoneyEvent && typeof prisma.jobMoneyEvent.findFirst === 'function') {
+    const paid = await prisma.jobMoneyEvent.findFirst({ where: { jobId, sourceMemoryItemId: memoryItemId, kind: 'COST_PAID', isDeleted: false } })
+    if (paid) throw { code: ErrorCode.INVALID_FIELD, message: 'Undo paid before changing a labour cost amount' }
+  }
 
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
@@ -204,6 +201,7 @@ export async function patchMemoryItem(
       costCurrency: 'costCurrency' in patch ? patch.costCurrency ?? null : existing.costCurrency,
       costQualifier: 'costQualifier' in patch ? patch.costQualifier ?? null : existing.costQualifier,
       totalCostAmount: finalTotalCostAmount,
+      labourBudgetEnabled: finalIsLabour && strictParsePositive(finalTotalCostAmount) !== null && effCostCurrency === 'GBP' && unresolvedFlags.length === 0,
       labourHours: 'labourHours' in patch ? patch.labourHours ?? null : existing.labourHours,
       labourPerson: 'labourPerson' in patch ? patch.labourPerson ?? null : existing.labourPerson,
       labourTask: 'labourTask' in patch ? patch.labourTask ?? null : existing.labourTask,
@@ -235,9 +233,19 @@ export async function removeMemoryItem(jobId: string, memoryItemId: string, user
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
 
-  await prisma.memoryItem.update({
-    where: { id: memoryItemId },
-    data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId },
+  // Removing a Budget cost source must not leave an active Money out pointing at a
+  // gone item. Soft-delete any active money events linked to this item (COST_PAID
+  // for a paid cost, or a REFUND on a returned item) in the same transaction, so
+  // Money never shows an orphaned active row and totals reduce consistently.
+  await prisma.$transaction(async (tx) => {
+    await tx.memoryItem.update({
+      where: { id: memoryItemId },
+      data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId },
+    })
+    await tx.jobMoneyEvent.updateMany({
+      where: { jobId, sourceMemoryItemId: memoryItemId, isDeleted: false },
+      data: { isDeleted: true, deletedAt: new Date() },
+    })
   })
 }
 
@@ -548,8 +556,11 @@ export interface CreateMemoryItemInput {
   labourPerson?: string | null
   labourTask?: string | null
   labourPersonId?: string | null
-  labourBudgetEnabled?: boolean | null
   budgetCategoryId?: string | null
+  // Direct add cost as already paid: when true, a trusted GBP cost also records a
+  // linked COST_PAID Money out event in the same transaction. Ignored for
+  // hours-only labour and other non-cost types.
+  markPaid?: boolean
 }
 
 // Ensure every manual item has a non-empty summary: prefer the submitted text,
@@ -581,6 +592,15 @@ function deriveManualSummary(input: CreateMemoryItemInput): string | null {
       if (!base) return null
       return task ? `${base} · ${task}` : base
     }
+    case 'budget_cost': {
+      // A cost with no explicit summary: build one from the person/task context
+      // and supplier where present (e.g. "Kurt · fitting cladding" or "Plaster").
+      const person = input.labourPerson?.trim()
+      const task = input.labourTask?.trim()
+      const supplier = input.supplierName?.trim()
+      const head = [person, task].filter(Boolean).join(' · ')
+      return head || supplier || null
+    }
     default:
       return null
   }
@@ -592,19 +612,15 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   const memoryType = input.memoryType.toUpperCase()
   const isLabour = memoryType === 'LABOUR'
 
-  // Labour person + Budget-treatment defaulting (new labour entries only). A
-  // selected person can fill in the assumed rate, the person's display name, and
-  // the default Budget treatment when the request omits them; a request that
-  // sends those fields always wins. No person/default → hours-only, never hidden
-  // Budget cost.
+  // Labour owns its job-local people and cost. A selected person's rate defaults
+  // only when cost fields are omitted; an entry override always wins.
   let personId: string | null = null
   let effCostAmount = input.costAmount
   let effCostCurrency = input.costCurrency
   let effCostQualifier = input.costQualifier
   let effLabourPerson = input.labourPerson
-  let labourBudgetEnabled: boolean | null = null
   if (isLabour) {
-    const person = input.labourPersonId ? await requireOwnedLabourPerson(userId, input.labourPersonId) : null
+    const person = input.labourPersonId ? await requireJobLabourPerson(jobId, input.labourPersonId) : null
     personId = person?.id ?? null
 
     const rateOmitted = !('costAmount' in input) && !('totalCostAmount' in input)
@@ -615,13 +631,6 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
     }
     if (person && (effLabourPerson == null || effLabourPerson.trim() === '')) {
       effLabourPerson = person.name
-    }
-    if (input.labourBudgetEnabled === true || input.labourBudgetEnabled === false) {
-      labourBudgetEnabled = input.labourBudgetEnabled
-    } else if (person) {
-      labourBudgetEnabled = person.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
-    } else {
-      labourBudgetEnabled = false
     }
   }
 
@@ -678,7 +687,7 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
       },
     })
 
-    return tx.memoryItem.create({
+    const item = await tx.memoryItem.create({
       data: {
         jobId,
         reviewDecisionId: decision.id,
@@ -700,12 +709,29 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
         labourPerson: effLabourPerson ?? null,
         labourTask: input.labourTask ?? null,
         labourPersonId: personId,
-        labourBudgetEnabled,
+        labourBudgetEnabled: isLabour && strictParsePositive(totalCostAmount) !== null && costCurrency === 'GBP' && unresolvedFlags.length === 0,
         happenedAt,
         unresolvedFlags,
         budgetCategoryId,
       },
     })
+
+    // Direct add cost as already paid: only a trusted, cost-bearing item with a
+    // safe GBP total is payable (same rule as Mark as paid). Doing it inside the
+    // create transaction means the cost and its Money out commit together — an
+    // untrusted markPaid rolls the whole create back, so there is never a cost
+    // without its paid movement or a paid movement without a duplicate guard.
+    if (input.markPaid === true) {
+      const classified = classifySpend(item)
+      if (classified.kind !== 'included') {
+        throw { code: ErrorCode.INVALID_FIELD, message: 'markPaid requires a trusted cost with a safe GBP total' }
+      }
+      await tx.jobMoneyEvent.create({
+        data: costPaidMoneyEventData(jobId, item.id, classified.row.lineTotalAmount, happenedAt ?? new Date()),
+      })
+    }
+
+    return item
   })
 
   // Manual memory has no source fact/transcript context.

@@ -105,9 +105,6 @@ describe('classifySpend — exclusion reasons', () => {
     ['labour with unresolved flags', labour({ unresolvedFlags: ['cost_uncertain'] }), 'cost_worth_checking'],
     // unresolved flags count as evidence worth checking even with no cost fields
     ['flagged material with no cost fields', item({ totalCostAmount: null, costAmount: null, unresolvedFlags: ['material_uncertain'] }), 'cost_worth_checking'],
-    // Labour people/budget rules: a trusted GBP labour cost that is not budget-enabled is hours-only
-    ['hours-only labour with trusted GBP cost', labour({ labourBudgetEnabled: false }), 'labour_hours_only'],
-    ['labour with trusted GBP cost and no budget flag', labour({ labourBudgetEnabled: null }), 'labour_hours_only'],
   ]
 
   it.each(cases)('%s → %s', (_name, m, reason) => {

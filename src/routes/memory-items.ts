@@ -16,13 +16,10 @@ import {
 } from '../lib/request-validation.js'
 import type { ValidationError } from '../lib/request-validation.js'
 
-// Shared labour person/budget field validation (create + patch): labourPersonId
-// is a string (link) or null (unlink); labourBudgetEnabled is a boolean.
-function labourEntryFieldsError(body: { labourPersonId?: unknown; labourBudgetEnabled?: unknown }): ValidationError | null {
-  return (
-    ('labourPersonId' in body ? validateBudgetCategoryRef(body.labourPersonId, 'labourPersonId') : null) ??
-    ('labourBudgetEnabled' in body ? validateOptionalBoolean(body.labourBudgetEnabled, 'labourBudgetEnabled') : null)
-  )
+// A labour person link is job-local; Budget inclusion is derived from the entry
+// cost and is not a client-managed flag.
+function labourEntryFieldsError(body: { labourPersonId?: unknown }): ValidationError | null {
+  return 'labourPersonId' in body ? validateBudgetCategoryRef(body.labourPersonId, 'labourPersonId') : null
 }
 
 // Runs the shared field validators that apply to both create and patch bodies;
@@ -33,7 +30,6 @@ function memoryFieldsError(body: {
   labourHours?: unknown
   costQualifier?: unknown
   labourPersonId?: unknown
-  labourBudgetEnabled?: unknown
   budgetCategoryId?: unknown
 }): ValidationError | null {
   return (
@@ -68,8 +64,8 @@ interface CreateBody {
   labourPerson?: string | null
   labourTask?: string | null
   labourPersonId?: string | null
-  labourBudgetEnabled?: boolean | null
   budgetCategoryId?: string | null
+  markPaid?: boolean
 }
 
 const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
@@ -83,7 +79,10 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!body.memoryType) {
         return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType is required' })
       }
-      const error = validateMemoryTargetType(body.memoryType) ?? memoryFieldsError(body)
+      const error =
+        validateMemoryTargetType(body.memoryType) ??
+        memoryFieldsError(body) ??
+        ('markPaid' in body ? validateOptionalBoolean(body.markPaid, 'markPaid') : null)
       if (error) return sendError(reply, error)
 
       try {
@@ -114,7 +113,6 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
       labourPerson?: string | null
       labourTask?: string | null
       labourPersonId?: string | null
-      labourBudgetEnabled?: boolean | null
       happenedAt?: string | null
       uncertaintyResolution?: string
       budgetCategoryId?: string | null
@@ -127,8 +125,8 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     // and/or the labour person link / Budget treatment, leaving other memory
     // fields untouched.
     if (body.memoryType == null) {
-      if (!('budgetCategoryId' in body) && !('labourPersonId' in body) && !('labourBudgetEnabled' in body)) {
-        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType, budgetCategoryId, labourPersonId, or labourBudgetEnabled is required' })
+      if (!('budgetCategoryId' in body) && !('labourPersonId' in body)) {
+        return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType, budgetCategoryId, or labourPersonId is required' })
       }
     } else {
       const typeError = validateMemoryTargetType(body.memoryType)

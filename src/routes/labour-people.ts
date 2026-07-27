@@ -5,12 +5,10 @@ import {
   createLabourPerson,
   patchLabourPerson,
   MAX_LABOUR_PERSON_NAME_LENGTH,
-  type ApiBudgetTreatment,
 } from '../services/labour-people.js'
 import { handleServiceError } from './jobs.js'
 import {
   validateNonEmptyBoundedString,
-  validateBudgetTreatment,
   isValidDecimalString,
   validateOptionalGbpCurrency,
 } from '../lib/request-validation.js'
@@ -21,11 +19,14 @@ function sendError(reply: FastifyReply, error: ValidationError) {
 }
 
 // Shared rate validation: null clears (patch), a present value must be strict
-// positive GBP decimal. Returns an error or null.
+// non-negative GBP decimal. Zero is an intentional job-local no-cost rate.
 function rateError(amount: unknown, currency: unknown): ValidationError | null {
+  if (amount == null && currency != null) {
+    return { code: ErrorCode.INVALID_FIELD, message: 'defaultHourlyRateCurrency requires defaultHourlyRateAmount' }
+  }
   if (amount != null) {
-    if (!isValidDecimalString(amount) || Number(amount) <= 0) {
-      return { code: ErrorCode.INVALID_FIELD, message: 'defaultHourlyRateAmount must be a positive decimal string' }
+    if (!isValidDecimalString(amount) || Number(amount) < 0) {
+      return { code: ErrorCode.INVALID_FIELD, message: 'defaultHourlyRateAmount must be a non-negative decimal string' }
     }
   }
   return validateOptionalGbpCurrency(currency, 'defaultHourlyRateCurrency')
@@ -35,7 +36,6 @@ interface CreateBody {
   name?: string
   defaultHourlyRateAmount?: string | null
   defaultHourlyRateCurrency?: string | null
-  defaultBudgetTreatment?: string
 }
 interface PatchBody extends CreateBody {}
 
@@ -62,8 +62,7 @@ const labourPeopleRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const error =
         validateNonEmptyBoundedString(body.name, 'name', MAX_LABOUR_PERSON_NAME_LENGTH) ??
-        rateError(body.defaultHourlyRateAmount, body.defaultHourlyRateCurrency) ??
-        validateBudgetTreatment(body.defaultBudgetTreatment, { required: true })
+        rateError(body.defaultHourlyRateAmount, body.defaultHourlyRateCurrency)
       if (error) return sendError(reply, error)
 
       try {
@@ -71,7 +70,6 @@ const labourPeopleRoutes: FastifyPluginAsync = async (fastify) => {
           name: body.name,
           defaultHourlyRateAmount: body.defaultHourlyRateAmount,
           defaultHourlyRateCurrency: body.defaultHourlyRateCurrency,
-          defaultBudgetTreatment: body.defaultBudgetTreatment as ApiBudgetTreatment,
         })
         return reply.code(201).send(person)
       } catch (err: unknown) {
@@ -87,8 +85,7 @@ const labourPeopleRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body ?? {}
       const error =
         (body.name !== undefined ? validateNonEmptyBoundedString(body.name, 'name', MAX_LABOUR_PERSON_NAME_LENGTH) : null) ??
-        rateError(body.defaultHourlyRateAmount, body.defaultHourlyRateCurrency) ??
-        validateBudgetTreatment(body.defaultBudgetTreatment, { required: false })
+        rateError(body.defaultHourlyRateAmount, body.defaultHourlyRateCurrency)
       if (error) return sendError(reply, error)
 
       try {
@@ -97,7 +94,6 @@ const labourPeopleRoutes: FastifyPluginAsync = async (fastify) => {
           name: body.name,
           defaultHourlyRateAmount: body.defaultHourlyRateAmount,
           defaultHourlyRateCurrency: body.defaultHourlyRateCurrency,
-          defaultBudgetTreatment: body.defaultBudgetTreatment as ApiBudgetTreatment | undefined,
         })
         return reply.send(person)
       } catch (err: unknown) {

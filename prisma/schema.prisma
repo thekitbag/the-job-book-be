@@ -21,36 +21,25 @@ model User {
   passwordResetTokens PasswordResetToken[]
   uploadedPhotos      JobPhoto[]
   supportAuditEvents  SupportAuditEvent[]
-  labourPeople        LabourPerson[]
 
   @@map("users")
 }
 
-// Lightweight, user-owned labour people (reusable across jobs). Deliberately NOT
-// payroll/staff management: no accounts, permissions, employment or scheduling
-// data — just who usually worked, an optional assumed rate, and whether that
-// person's labour normally counts toward Budget.
-enum LabourBudgetTreatment {
-  COUNTS_TOWARD_BUDGET
-  HOURS_ONLY
-}
-
 model LabourPerson {
-  id                        String                @id @default(uuid())
-  ownerUserId               String
+  id                        String   @id @default(uuid())
+  jobId                     String
   name                      String
   normalizedName            String
   defaultHourlyRateAmount   String?
   defaultHourlyRateCurrency String?
-  defaultBudgetTreatment    LabourBudgetTreatment @default(HOURS_ONLY)
-  isArchived                Boolean               @default(false)
-  createdAt                 DateTime              @default(now())
-  updatedAt                 DateTime              @updatedAt
+  isArchived                Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 
-  owner User @relation(fields: [ownerUserId], references: [id])
+  job Job @relation(fields: [jobId], references: [id])
 
-  @@index([ownerUserId, normalizedName])
-  @@index([ownerUserId, isArchived])
+  @@index([jobId, normalizedName])
+  @@index([jobId, isArchived])
   @@map("labour_people")
 }
 
@@ -96,6 +85,7 @@ model Job {
   photos           JobPhoto[]
   payments         JobPayment[]
   moneyEvents      JobMoneyEvent[]
+  labourPeople     LabourPerson[]
 
   @@map("jobs")
 }
@@ -254,6 +244,7 @@ enum FactType {
   CUSTOMER_CHANGE
   WATCH_OUT
   LABOUR
+  BUDGET_COST
   GENERAL_NOTE
   UNCLEAR
 }

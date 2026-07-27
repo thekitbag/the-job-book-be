@@ -27,8 +27,13 @@ vi.mock('../src/db/client.js', () => ({
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
     jobPhoto: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
     jobPayment: { findMany: vi.fn() },
+    jobMoneyEvent: { updateMany: vi.fn(), findMany: vi.fn() },
     labourPerson: { findMany: vi.fn() },
     queueItem: { findMany: vi.fn() },
+    $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      const { prisma } = await import('../src/db/client.js')
+      return fn(prisma)
+    }),
   },
 }))
 
@@ -75,6 +80,7 @@ beforeEach(async () => {
   vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(null)
   vi.mocked((prisma.memoryItem as any).update).mockImplementation(async ({ data }: any) => ({ ...makeMemory(), ...data, sourceFact: null }))
+  vi.mocked((prisma as any).jobMoneyEvent.updateMany).mockResolvedValue({ count: 0 })
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.jobBudgetCategory.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.labourPerson.findMany as any).mockResolvedValue([])

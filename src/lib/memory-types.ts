@@ -28,6 +28,10 @@ export const MEMORY_TYPES: readonly MemoryTypeInfo[] = [
   { storedType: 'CUSTOMER_CHANGE', apiType: 'customer_change', sectionKey: 'customer_changes', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'WATCH_OUT', apiType: 'watch_out', sectionKey: 'watch_outs', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'LABOUR', apiType: 'labour', sectionKey: 'labour', canAssignBudgetCategory: true, canContributeSpend: true },
+  // General Budget cost: trusted or candidate job cost — labour cost, plant, hire,
+  // subcontractor, or other non-material costs. Labour tracks hours only; cost
+  // lives here. Trusted GBP totals count toward Budget regardless of paid state.
+  { storedType: 'BUDGET_COST', apiType: 'budget_cost', sectionKey: 'budget_costs', canAssignBudgetCategory: true, canContributeSpend: true },
   { storedType: 'GENERAL_NOTE', apiType: 'general_note', sectionKey: 'general_notes', canAssignBudgetCategory: false, canContributeSpend: false },
   { storedType: 'UNCLEAR', apiType: 'unclear', sectionKey: 'unclear_items', canAssignBudgetCategory: false, canContributeSpend: false },
 ] as const

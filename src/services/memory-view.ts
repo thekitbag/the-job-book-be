@@ -364,7 +364,7 @@ const formatHoursTotal = (n: number) => String(Math.round(n * 100) / 100)
 // the created date), newest day first. Hour totals are safe totals: strict
 // positive decimal hours with no hour-affecting unresolved flags. Excluded
 // rows stay visible as worth checking.
-function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifiable>) {
+function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifiable>, paidEventByItem = new Map<string, { id: string; occurredAt: Date }>()) {
   const byDay = new Map<string, Array<LabourHoursSource & SpendClassifiable>>()
   for (const m of items) {
     const effective = m.happenedAt ?? m.sourceFact?.sourceNote.capturedAt ?? m.createdAt
@@ -392,6 +392,7 @@ function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifia
         // classification carries a line total.
         const classified = classifySpend(m)
         const included = classified.kind === 'included' ? classified.row : null
+        const paidEvent = paidEventByItem.get(m.id) ?? null
         return {
           memoryItemId: m.id,
           labourPerson: m.labourPerson,
@@ -406,6 +407,9 @@ function buildLabourHoursSummary(items: Array<LabourHoursSource & SpendClassifia
           lineTotalAmount: included?.lineTotalAmount ?? null,
           lineTotalCurrency: included ? included.lineTotalCurrency : null,
           lineTotalLabel: included?.lineTotalLabel ?? null,
+          isPaid: paidEvent !== null,
+          paidMoneyEventId: paidEvent?.id ?? null,
+          paidAt: paidEvent?.occurredAt ?? null,
         }
       })
       const totalHours = anyIncluded ? formatHoursTotal(dayTotal) : null
@@ -530,6 +534,7 @@ const SECTION_CONFIG = [
   { key: 'customer_changes', label: 'Customer changes' },
   { key: 'watch_outs', label: 'Watch outs' },
   { key: 'labour', label: 'Labour' },
+  { key: 'budget_costs', label: 'Costs' },
   { key: 'general_notes', label: 'Notes' },
 ] as const
 
@@ -550,7 +555,7 @@ export async function getMemoryView(jobId: string, userId: string) {
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
   if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
-  const [memoryItems, { sections: queueSections }] = await Promise.all([
+  const [memoryItems, paidEvents, { sections: queueSections }] = await Promise.all([
     prisma.memoryItem.findMany({
       // Active job record only — soft-removed items are invisible here
       where: { jobId, isRemoved: false },
@@ -564,8 +569,12 @@ export async function getMemoryView(jobId: string, userId: string) {
       },
       orderBy: { createdAt: 'desc' },
     }),
+    prisma.jobMoneyEvent?.findMany
+      ? prisma.jobMoneyEvent.findMany({ where: { jobId, kind: 'COST_PAID', isDeleted: false }, select: { id: true, sourceMemoryItemId: true, occurredAt: true } })
+      : Promise.resolve([]),
     deriveFreshQueueSections(jobId, new Date()),
   ])
+  const paidEventByItem = new Map((paidEvents ?? []).flatMap((event) => event.sourceMemoryItemId ? [[event.sourceMemoryItemId, event] as const] : []))
 
   // Group memory items by section key derived from memoryType
   const bySection = new Map<string, typeof memoryItems>(SECTION_CONFIG.map((s) => [s.key, []]))
@@ -579,6 +588,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     label,
     items: (bySection.get(key) ?? []).map((m) => {
       const fact = m.sourceFact ?? null
+      const paidEvent = paidEventByItem.get(m.id) ?? null
       return {
         id: m.id,
         memoryType: (m.memoryType as string).toLowerCase(),
@@ -607,6 +617,9 @@ export async function getMemoryView(jobId: string, userId: string) {
         refundLabel: formatRefundLabel(m.refundAmount, m.refundCurrency),
         unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
         lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
+        isPaid: paidEvent !== null,
+        paidMoneyEventId: paidEvent?.id ?? null,
+        paidAt: paidEvent?.occurredAt ?? null,
         uncertaintyFlags: m.unresolvedFlags,
         sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
         sourceCandidateFactId: m.sourceCandidateFactId,
@@ -667,7 +680,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     totalKnownCost: buildNetKnownCost(grossKnownCost, refunds.knownRefundAmount),
   }
 
-  const labourHoursSummary = buildLabourHoursSummary(labourItems)
+  const labourHoursSummary = buildLabourHoursSummary(labourItems, paidEventByItem)
 
   return {
     job: {

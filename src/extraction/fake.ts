@@ -48,17 +48,20 @@ export const FAKE_EXTRACTION_FACTS: CandidateFactDraft[] = [
     confidenceReason: 'Hours and task stated; no cost mentioned',
     uncertaintyFlags: [],
   },
+  // A coherent labour observation remains one cost-aware Labour outcome. Budget
+  // rolls its trusted positive total up; it is not a second draft.
   {
     factType: 'labour',
-    summary: 'Tom did 8 hours on electrics at £35 an hour',
+    summary: 'Tom did 8 hours on electrics',
     labourHours: '8',
     labourTask: 'electrics',
     labourPerson: 'Tom',
     costAmount: '35',
     costCurrency: 'GBP',
     costQualifier: 'per_hour',
+    totalCostAmount: '280',
     confidenceLabel: 'high',
-    confidenceReason: 'Hours, person, task and hourly rate all stated',
+    confidenceReason: 'Hours, person and task stated',
     uncertaintyFlags: [],
   },
   {
@@ -70,7 +73,7 @@ export const FAKE_EXTRACTION_FACTS: CandidateFactDraft[] = [
     costQualifier: 'total',
     totalCostAmount: '600',
     confidenceLabel: 'high',
-    confidenceReason: 'Explicit total labour cost stated',
+    confidenceReason: 'Explicit total labour cost stated, no hours',
     uncertaintyFlags: [],
   },
 ]

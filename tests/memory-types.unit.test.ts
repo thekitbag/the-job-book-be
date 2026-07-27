@@ -24,6 +24,7 @@ const ALL_STORED = [
   'CUSTOMER_CHANGE',
   'WATCH_OUT',
   'LABOUR',
+  'BUDGET_COST',
   'GENERAL_NOTE',
   'UNCLEAR',
 ]
@@ -37,6 +38,7 @@ const EXPECTED_SECTIONS: Record<string, string> = {
   CUSTOMER_CHANGE: 'customer_changes',
   WATCH_OUT: 'watch_outs',
   LABOUR: 'labour',
+  BUDGET_COST: 'budget_costs',
   GENERAL_NOTE: 'general_notes',
   UNCLEAR: 'unclear_items',
 }
@@ -83,16 +85,16 @@ describe('unknown values', () => {
 })
 
 describe('eligibility', () => {
-  it('category eligibility is exactly ORDERED_MATERIAL and LABOUR', () => {
+  it('category eligibility is exactly BUDGET_COST, ORDERED_MATERIAL and LABOUR', () => {
     const eligible = ALL_STORED.filter(isCategoryAssignableMemoryType)
-    expect(eligible.sort()).toEqual(['LABOUR', 'ORDERED_MATERIAL'])
+    expect(eligible.sort()).toEqual(['BUDGET_COST', 'LABOUR', 'ORDERED_MATERIAL'])
     const apiEligible = ALL_STORED.map((t) => t.toLowerCase()).filter(isCategoryAssignableApiMemoryType)
-    expect(apiEligible.sort()).toEqual(['labour', 'ordered_material'])
+    expect(apiEligible.sort()).toEqual(['budget_cost', 'labour', 'ordered_material'])
   })
 
-  it('spend eligibility is exactly ORDERED_MATERIAL and LABOUR', () => {
+  it('spend eligibility is exactly BUDGET_COST, ORDERED_MATERIAL and LABOUR', () => {
     const eligible = ALL_STORED.filter(isSpendMemoryType)
-    expect(eligible.sort()).toEqual(['LABOUR', 'ORDERED_MATERIAL'])
+    expect(eligible.sort()).toEqual(['BUDGET_COST', 'LABOUR', 'ORDERED_MATERIAL'])
   })
 
   it('UNCLEAR is a valid stored type but never category/spend eligible or request-targetable', () => {
@@ -104,8 +106,9 @@ describe('eligibility', () => {
 })
 
 describe('VALID_MEMORY_TYPES (request-target set)', () => {
-  it('is the nine lower-case non-unclear types', () => {
+  it('is the ten lower-case non-unclear types', () => {
     expect([...VALID_MEMORY_TYPES].sort()).toEqual([
+      'budget_cost',
       'customer_change',
       'general_note',
       'labour',
