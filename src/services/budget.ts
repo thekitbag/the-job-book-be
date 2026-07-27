@@ -154,8 +154,13 @@ export async function patchBudgetCategory(
 // this summary and memory-view's costSummary can never disagree. The budget row
 // is the classifier's included row minus budgetCategoryId (used for grouping,
 // not exposed) with memoryType lowercased for the wire.
-function toSpendRow({ budgetCategoryId: _grouping, ...row }: IncludedSpendRow) {
-  return { ...row, memoryType: row.memoryType.toLowerCase() }
+function toSpendRow({ budgetCategoryId: _grouping, ...row }: IncludedSpendRow, paidEvent?: { id: string; occurredAt: Date }) {
+  return {
+    ...row, memoryType: row.memoryType.toLowerCase(),
+    isPaid: paidEvent !== undefined,
+    paidMoneyEventId: paidEvent?.id ?? null,
+    paidAt: paidEvent?.occurredAt ?? null,
+  }
 }
 
 type SpendRow = ReturnType<typeof toSpendRow>
@@ -194,15 +199,19 @@ function budgetMath(budgetAmount: string | null, spend: number) {
 export async function getBudgetSummary(jobId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
 
-  const [categories, items] = await Promise.all([
+  const [categories, items, paidEvents] = await Promise.all([
     prisma.jobBudgetCategory.findMany({
       where: { jobId, isArchived: false },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     }),
     prisma.memoryItem.findMany({
-      where: { jobId, isRemoved: false, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR', 'RETURNED_MATERIAL'] } },
+      where: { jobId, isRemoved: false, memoryType: { in: ['ORDERED_MATERIAL', 'LABOUR', 'BUDGET_COST', 'RETURNED_MATERIAL'] } },
     }),
+    prisma.jobMoneyEvent?.findMany
+      ? prisma.jobMoneyEvent.findMany({ where: { jobId, kind: 'COST_PAID', isDeleted: false }, select: { id: true, sourceMemoryItemId: true, occurredAt: true } })
+      : Promise.resolve([]),
   ])
+  const paidEventByItem = new Map((paidEvents ?? []).flatMap((event) => event.sourceMemoryItemId ? [[event.sourceMemoryItemId, event] as const] : []))
 
   const safe = items
     .map(classifySpend)
@@ -228,7 +237,7 @@ export async function getBudgetSummary(jobId: string, userId: string) {
   const rowsByCategory = new Map<string, SpendRow[]>()
   const uncategorizedRows: SpendRow[] = []
   for (const included of safe) {
-    const row = toSpendRow(included)
+    const row = toSpendRow(included, paidEventByItem.get(included.memoryItemId))
     if (included.budgetCategoryId == null) {
       uncategorizedRows.push(row)
     } else {
@@ -268,7 +277,7 @@ export async function getBudgetSummary(jobId: string, userId: string) {
   // create a Labour category to see labour spend. Rows may also appear in
   // categories/uncategorized for older clients; totals below already count
   // each safe row exactly once, so this group never double-counts.
-  const labourRows = safe.filter((r) => r.memoryType === 'LABOUR').map(toSpendRow)
+  const labourRows = safe.filter((r) => r.memoryType === 'LABOUR').map((row) => toSpendRow(row, paidEventByItem.get(row.memoryItemId)))
   const labourCategory = categories.find((c) => c.name.trim().toLowerCase() === 'labour') ?? null
   const labourSpend = sumRows(labourRows)
   const labourMath = budgetMath(labourCategory?.budgetAmount ?? null, labourSpend)

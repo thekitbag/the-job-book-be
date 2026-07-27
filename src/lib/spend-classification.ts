@@ -4,8 +4,10 @@
 // inclusion/exclusion decisions cannot drift apart.
 //
 // Rules (GBP pilot):
-//   included    — ORDERED_MATERIAL or LABOUR, no unresolved flags, a stored
-//                 totalCostAmount, and costCurrency === 'GBP'
+//   included    — ORDERED_MATERIAL, BUDGET_COST, or LABOUR with a positive
+//                 unresolved flags, a stored totalCostAmount, and
+//                 costCurrency === 'GBP'. Paid state is never an inclusion
+//                 condition — Money out tracks payment separately.
 //   excluded    — everything else that is a spend type, with a reason:
 //                 · no cost evidence at all → 'no_cost_remembered' (materials)
 //                   / 'no_rate_or_cost' (labour)
@@ -36,9 +38,6 @@ export interface SpendClassifiable {
   costAmount: string | null
   costCurrency: string | null
   totalCostAmount: string | null
-  // Labour people/budget rules: labour contributes to Budget only when explicitly
-  // budget-enabled. Absent/null (legacy) and false are treated as hours-only.
-  labourBudgetEnabled?: boolean | null
   unresolvedFlags: string[]
   budgetCategoryId?: string | null
 }
@@ -109,11 +108,10 @@ export function classifySpend(item: SpendClassifiable): SpendClassification {
     return { kind: 'excluded', row: { ...itemFacts(item), reason: 'cost_worth_checking' } }
   }
 
-  // Labour has a trusted GBP cost, but it only counts toward Budget when the
-  // entry is explicitly budget-enabled. Hours-only labour stays visible in Labour
-  // (and its hours still count) but is excluded from Budget cost and Money out.
-  if (item.memoryType === 'LABOUR' && item.labourBudgetEnabled !== true) {
-    return { kind: 'excluded', row: { ...itemFacts(item), reason: 'labour_hours_only' } }
+  // £0 is trusted no-cost labour (hours remain visible in Labour) but never a
+  // committed Budget cost or payable Money movement.
+  if (strictParsePositive(item.totalCostAmount) === null) {
+    return { kind: 'excluded', row: { ...itemFacts(item), reason: item.memoryType === 'LABOUR' ? 'no_rate_or_cost' : 'no_cost_remembered' } }
   }
 
   return {

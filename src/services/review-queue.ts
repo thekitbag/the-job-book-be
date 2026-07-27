@@ -17,14 +17,12 @@ import {
   getActiveLabourPeople,
   matchLabourPersonByName,
   normalizeLabourPerson,
-  toApiTreatment,
-  type ApiBudgetTreatment,
 } from './labour-people.js'
 import { MEMORY_TYPES, isCategoryAssignableApiMemoryType } from '../lib/memory-types.js'
 
 type ActiveLabourPerson = Awaited<ReturnType<typeof getActiveLabourPeople>>[number]
 
-// Resolve the labourPersonId + labourBudgetEnabled + display name to persist when
+// Resolve the job-local labour person + display name to persist when
 // a labour draft is confirmed/corrected. An explicit chosen person id wins;
 // otherwise the entry's person text is matched to an active person by exact name.
 // Budget treatment: an explicit value wins, else the matched person's default,
@@ -37,8 +35,6 @@ function resolveLabourDecision(
     personText: string | null | undefined
     personIdProvided: boolean
     personId: string | null | undefined
-    budgetEnabledProvided: boolean
-    budgetEnabled: boolean | null | undefined
   },
 ): { labourPersonId: string | null; labourBudgetEnabled: boolean | null; labourPerson: string | null } {
   if (!opts.isLabour) {
@@ -53,15 +49,9 @@ function resolveLabourDecision(
   } else {
     person = matchLabourPersonByName(activePeople, opts.personText)
   }
-  const labourBudgetEnabled =
-    opts.budgetEnabledProvided && typeof opts.budgetEnabled === 'boolean'
-      ? opts.budgetEnabled
-      : person
-        ? person.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
-        : false
   const labourPerson =
     opts.personText && opts.personText.trim() !== '' ? opts.personText : person ? person.name : opts.personText ?? null
-  return { labourPersonId: person?.id ?? null, labourBudgetEnabled, labourPerson }
+  return { labourPersonId: person?.id ?? null, labourBudgetEnabled: false, labourPerson }
 }
 
 // ── Section configuration ─────────────────────────────────────────────────────
@@ -80,6 +70,7 @@ const SECTION_LABELS: Record<string, string> = {
   customer_changes: 'Customer changes',
   watch_outs: 'Watch outs',
   labour: 'Labour',
+  budget_costs: 'Costs',
   unclear_items: 'Unclear items',
 }
 
@@ -492,7 +483,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
   // Active labour people drive labour draft enrichment the same way.
   const [budgetCategories, activeLabourPeople] = await Promise.all([
     getActiveBudgetCategories(jobId),
-    getActiveLabourPeople(userId),
+    getActiveLabourPeople(jobId),
   ])
 
   // Add sourceContext and a (response-only) budget category suggestion to each item.
@@ -509,19 +500,14 @@ export async function getReviewQueue(jobId: string, userId: string) {
       // and hours-only by default. All of this is visible and user-correctable.
       const inheritedPerson =
         pm.memoryType === 'labour' ? matchLabourPersonByName(activeLabourPeople, pm.labourPerson) : null
-      const inheritedBudgetTreatment: ApiBudgetTreatment | null =
-        inheritedPerson ? toApiTreatment(inheritedPerson.defaultBudgetTreatment) : null
       const labourEnrichment =
         pm.memoryType === 'labour'
           ? {
               labourPersonId: inheritedPerson ? inheritedPerson.id : null,
-              labourBudgetEnabled: inheritedPerson
-                ? inheritedPerson.defaultBudgetTreatment === 'COUNTS_TOWARD_BUDGET'
-                : false,
               inheritedLabourPerson: inheritedPerson ? normalizeLabourPerson(inheritedPerson) : null,
-              inheritedBudgetTreatment,
+              inheritedBudgetTreatment: null,
             }
-          : { labourPersonId: null, labourBudgetEnabled: null, inheritedLabourPerson: null, inheritedBudgetTreatment: null }
+          : { labourPersonId: null, inheritedLabourPerson: null, inheritedBudgetTreatment: null }
       return {
         ...item,
         proposedMemory: {
@@ -627,14 +613,12 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
 
     // Labour person/Budget treatment: an explicit payload choice wins, else the
     // draft's person text is matched to an active person's defaults.
-    const activeLabourPeople = await getActiveLabourPeople(userId)
+    const activeLabourPeople = await getActiveLabourPeople(jobId)
     const confirmLabour = resolveLabourDecision(activeLabourPeople, {
       isLabour: pm.memoryType === 'labour',
       personText: pm.labourPerson,
       personIdProvided: payload.labourPersonId !== undefined,
       personId: payload.labourPersonId,
-      budgetEnabledProvided: payload.labourBudgetEnabled !== undefined,
-      budgetEnabled: payload.labourBudgetEnabled,
     })
 
     const result = await prisma.$transaction(async (tx) => {
@@ -731,14 +715,12 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
 
     // Labour person/Budget treatment from the corrected fields: explicit choice
     // wins, else match the corrected person text to an active person's defaults.
-    const activeLabourPeople = await getActiveLabourPeople(userId)
+    const activeLabourPeople = await getActiveLabourPeople(jobId)
     const correctLabour = resolveLabourDecision(activeLabourPeople, {
       isLabour: corrected.memoryType.toLowerCase() === 'labour',
       personText: corrected.labourPerson,
       personIdProvided: corrected.labourPersonId !== undefined,
       personId: corrected.labourPersonId,
-      budgetEnabledProvided: corrected.labourBudgetEnabled !== undefined,
-      budgetEnabled: corrected.labourBudgetEnabled,
     })
 
     const result = await prisma.$transaction(async (tx) => {

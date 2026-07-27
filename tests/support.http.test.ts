@@ -425,7 +425,7 @@ describe('GET /api/internal/support/jobs/:jobId/labour-people', () => {
     }])
     const res = await app.inject({ method: 'GET', url: `/api/internal/support/jobs/${JOB_ID}/labour-people`, headers: asAdmin })
     expect(res.statusCode).toBe(200)
-    expect(res.json().people[0]).toMatchObject({ id: 'sup-person-1', name: 'Kurt', defaultBudgetTreatment: 'counts_toward_budget' })
+    expect(res.json().people[0]).toMatchObject({ id: 'sup-person-1', name: 'Kurt' })
 
     const actions = await auditActions()
     expect(actions).toContainEqual(expect.objectContaining({

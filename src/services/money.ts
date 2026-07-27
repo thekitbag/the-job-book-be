@@ -273,17 +273,7 @@ export async function markMoneyOut(jobId: string, userId: string, input: MarkMon
 
   try {
     await prisma.jobMoneyEvent.create({
-      data: {
-        jobId,
-        direction: 'OUT',
-        kind: 'COST_PAID',
-        amount,
-        currency: 'GBP',
-        occurredAt,
-        note,
-        reference,
-        sourceMemoryItemId,
-      },
+      data: { ...costPaidMoneyEventData(jobId, sourceMemoryItemId, amount, occurredAt), note, reference },
     })
   } catch (err: unknown) {
     if ((err as { code?: string })?.code === 'P2002') {
@@ -329,5 +319,29 @@ export function refundMoneyEventData(
     currency: 'GBP',
     occurredAt,
     sourceMemoryItemId: returnedMemoryItemId,
+  }
+}
+
+// ── Cost-paid money event (Money out linked to a Budget cost item) ─────────────
+
+// The create-data for a COST_PAID Money out event linked to a Budget cost item.
+// Shared by markMoneyOut (mark an existing item paid) and the direct-add cost
+// `markPaid` path (create the cost and its paid movement atomically). The partial
+// unique index on (jobId, sourceMemoryItemId) where kind=COST_PAID and not
+// deleted prevents a duplicate active paid event for the same source item.
+export function costPaidMoneyEventData(
+  jobId: string,
+  sourceMemoryItemId: string,
+  amount: string,
+  occurredAt: Date,
+) {
+  return {
+    jobId,
+    direction: 'OUT' as const,
+    kind: 'COST_PAID' as const,
+    amount,
+    currency: 'GBP',
+    occurredAt,
+    sourceMemoryItemId,
   }
 }

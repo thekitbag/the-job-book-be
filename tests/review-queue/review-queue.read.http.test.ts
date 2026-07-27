@@ -46,7 +46,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     const body = res.json()
     expect(body.jobId).toBe(JOB_ID)
     expect(body.generatedAt).toBeDefined()
-    expect(body.sections).toHaveLength(8)
+    expect(body.sections).toHaveLength(9)
     const totalItems = body.sections.reduce((n: number, s: any) => n + s.items.length, 0)
     expect(totalItems).toBe(0)
     expect(body.alreadyRemembered).toEqual([])

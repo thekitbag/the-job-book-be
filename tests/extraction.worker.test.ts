@@ -722,26 +722,27 @@ describe('runExtraction — labour facts', () => {
     expect(d.totalCostAmount).toBeNull()
   })
 
-  it('derives a safe total for per_hour labour (hours × rate)', async () => {
+  it('keeps a mixed hours-and-cost recording as one LABOUR fact', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
-    const d = dataFor(prisma, 'electrics')
-    expect(d.factType).toBe('LABOUR')
-    expect(d.labourHours).toBe('8')
-    expect(d.labourPerson).toBe('Tom')
-    expect(d.costQualifier).toBe('per_hour')
-    expect(d.costAmount).toBe('35')
-    expect(d.totalCostAmount).toBe('280') // 8 × 35
+    // Labour owns the coherent hours-and-cost observation.
+    const hours = dataFor(prisma, 'Tom did 8 hours on electrics')
+    expect(hours.factType).toBe('LABOUR')
+    expect(hours.labourHours).toBe('8')
+    expect(hours.labourPerson).toBe('Tom')
+    expect(hours.totalCostAmount).toBe('280')
+    expect(hours.costAmount).toBe('35')
   })
 
-  it('keeps an explicit labour total', async () => {
+  it('records a labour cost with no hours as a LABOUR fact', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
     const d = dataFor(prisma, 'Labour on the roof')
+    expect(d.factType).toBe('LABOUR')
     expect(d.costQualifier).toBe('total')
     expect(d.totalCostAmount).toBe('600')
     expect(d.labourHours).toBeNull()

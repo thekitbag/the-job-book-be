@@ -111,9 +111,9 @@ describe('review-queue — labour people enrichment', () => {
     const body = res.json()
     const pm = body.sections.find((s: any) => s.key === 'labour').items[0].proposedMemory
     expect(pm.labourPersonId).toBe('p-tom')
-    expect(pm.labourBudgetEnabled).toBe(true)
-    expect(pm.inheritedLabourPerson).toMatchObject({ id: 'p-tom', name: 'Tom', defaultHourlyRateAmount: '35', defaultBudgetTreatment: 'counts_toward_budget' })
-    expect(pm.inheritedBudgetTreatment).toBe('counts_toward_budget')
+    expect(pm.labourBudgetEnabled).toBeNull()
+    expect(pm.inheritedLabourPerson).toMatchObject({ id: 'p-tom', name: 'Tom', defaultHourlyRateAmount: '35' })
+    expect(pm.inheritedBudgetTreatment).toBeNull()
     expect(body.labourPeople.map((p: any) => p.id)).toContain('p-tom')
   })
 
@@ -125,18 +125,18 @@ describe('review-queue — labour people enrichment', () => {
     const res = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/review-queue`, headers: { 'x-pilot-user-id': USER_ID } })
     const pm = res.json().sections.find((s: any) => s.key === 'labour').items[0].proposedMemory
     expect(pm.labourPersonId).toBeNull()
-    expect(pm.labourBudgetEnabled).toBe(false)
+    expect(pm.labourBudgetEnabled).toBeNull()
     expect(pm.inheritedLabourPerson).toBeNull()
   })
 
-  it('confirm persists the name-matched person and its default budget treatment', async () => {
+  it('confirm persists the name-matched job-local person without a budget treatment', async () => {
     vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeLabourQueueItem())
     vi.mocked(prisma.labourPerson.findMany as any).mockResolvedValue([makeLabourPerson()])
     const res = await post({ queueItemId: ITEM_ID, action: 'confirm' })
     expect(res.statusCode).toBe(200)
     const data = vi.mocked(prisma.memoryItem.create as any).mock.calls[0][0].data
     expect(data.labourPersonId).toBe('p-tom')
-    expect(data.labourBudgetEnabled).toBe(true)
+    expect(data.labourBudgetEnabled).toBe(false)
   })
 
   it('confirm honours an explicit labourBudgetEnabled override', async () => {
@@ -149,7 +149,7 @@ describe('review-queue — labour people enrichment', () => {
     expect(data.labourPersonId).toBe('p-tom')
   })
 
-  it('correct persists a chosen labourPersonId and labourBudgetEnabled', async () => {
+  it('correct persists a chosen labourPersonId without a budget treatment', async () => {
     vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeLabourQueueItem())
     vi.mocked(prisma.labourPerson.findMany as any).mockResolvedValue([makeLabourPerson()])
     const res = await post({
@@ -159,7 +159,7 @@ describe('review-queue — labour people enrichment', () => {
     expect(res.statusCode).toBe(200)
     const data = vi.mocked(prisma.memoryItem.create as any).mock.calls[0][0].data
     expect(data.labourPersonId).toBe('p-tom')
-    expect(data.labourBudgetEnabled).toBe(true)
+    expect(data.labourBudgetEnabled).toBe(false)
   })
 
   it('correct rejects a labourPersonId that is not an active person for the user', async () => {

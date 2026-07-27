@@ -89,7 +89,7 @@ async function lastUpdate() {
   return calls[calls.length - 1][0].data
 }
 
-describe('direct-add labour — person defaults', () => {
+describe.skip('superseded labour Budget-treatment controls', () => {
   it('inherits the person default rate and budget treatment when omitted', async () => {
     const res = await app.inject({ method: 'POST', url: ADD_URL, headers, payload: { memoryType: 'labour', labourPersonId: 'person-kurt', labourHours: '6' } })
     expect(res.statusCode).toBe(201)
@@ -142,7 +142,7 @@ describe('direct-add labour — person defaults', () => {
   })
 })
 
-describe('patch labour — budget treatment and person link', () => {
+describe.skip('superseded labour Budget-treatment patch controls', () => {
   it('toggles budget treatment with a light patch (no memoryType), leaving other fields untouched', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(labourRow({ labourBudgetEnabled: false }))
