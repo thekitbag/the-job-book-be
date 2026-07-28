@@ -157,9 +157,13 @@ export async function patchBudgetCategory(
 function toSpendRow({ budgetCategoryId: _grouping, ...row }: IncludedSpendRow, paidEvent?: { id: string; occurredAt: Date }) {
   return {
     ...row, memoryType: row.memoryType.toLowerCase(),
+    // `isPaid` is retained for the existing client; paymentState is the
+    // authoritative additive contract for Budget rows.
     isPaid: paidEvent !== undefined,
+    paymentState: paidEvent ? 'paid' as const : 'not_paid' as const,
     paidMoneyEventId: paidEvent?.id ?? null,
     paidAt: paidEvent?.occurredAt ?? null,
+    eligibleForPaymentState: true,
   }
 }
 
@@ -178,6 +182,29 @@ function spendBlock(rows: SpendRow[]) {
     knownSpendAmount: amount,
     knownSpendCurrency: 'GBP',
     knownSpendLabel: `${gbp(amount)} known spend`,
+  }
+}
+
+function isTrustedZeroCost(item: { costAmount: string | null; totalCostAmount: string | null; costCurrency: string | null; unresolvedFlags: string[] }) {
+  if (item.unresolvedFlags.length > 0 || item.costCurrency !== 'GBP') return false
+  return (item.totalCostAmount === '0' || item.costAmount === '0')
+}
+
+function paymentSummary(rows: SpendRow[], hasMissingPrice: boolean) {
+  const paidRows = rows.filter((row) => row.paymentState === 'paid')
+  const unpaidRows = rows.filter((row) => row.paymentState === 'not_paid')
+  const paidAmount = paidRows.length ? sumKnownSpend(paidRows.map((row) => row.lineTotalAmount)) : null
+  const notPaidAmount = unpaidRows.length ? sumKnownSpend(unpaidRows.map((row) => row.lineTotalAmount)) : null
+  const paymentState = rows.length === 0 ? null : paidRows.length === rows.length ? 'paid' as const : unpaidRows.length === rows.length ? 'not_paid' as const : 'some_paid' as const
+  return {
+    paymentState,
+    paidAmount,
+    paidCurrency: paidAmount === null ? null : 'GBP' as const,
+    paidLabel: paidAmount === null ? null : `${gbp(paidAmount)} paid`,
+    notPaidAmount,
+    notPaidCurrency: notPaidAmount === null ? null : 'GBP' as const,
+    notPaidLabel: notPaidAmount === null ? null : `${gbp(notPaidAmount)} not paid`,
+    paymentStateReason: hasMissingPrice ? 'missing_price_present' as const : rows.length ? 'eligible_items' as const : 'no_eligible_items' as const,
   }
 }
 
@@ -217,6 +244,16 @@ export async function getBudgetSummary(jobId: string, userId: string) {
     .map(classifySpend)
     .filter((c): c is Extract<ReturnType<typeof classifySpend>, { kind: 'included' }> => c.kind === 'included')
     .map((c) => c.row)
+
+  // Excluded source items stay outside committed-cost arithmetic. When they are
+  // assigned to a category they still prevent a misleading all-clear payment
+  // state, except trusted £0 which is deliberately no-cost rather than missing.
+  const missingPriceCategoryIds = new Set<string>()
+  for (const item of items) {
+    if (item.budgetCategoryId === null || isTrustedZeroCost(item)) continue
+    const classified = classifySpend(item)
+    if (classified.kind === 'excluded') missingPriceCategoryIds.add(item.budgetCategoryId)
+  }
 
   // Trusted refunds from returned materials: strict positive GBP refund, no
   // unresolved flags. These reduce the job-level net known spend but are NOT
@@ -261,6 +298,7 @@ export async function getBudgetSummary(jobId: string, userId: string) {
       remainingAmount: math.remainingAmount,
       remainingLabel: math.remainingLabel,
       overBudget: math.overBudget,
+      ...paymentSummary(rows, missingPriceCategoryIds.has(c.id)),
       rows,
     }
   })
