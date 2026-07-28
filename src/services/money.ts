@@ -67,6 +67,8 @@ export interface MoneyRow {
   sourceMemoryItemId: string | null
   sourceItemLabel: string | null
   sourceMemoryType: string | null
+  sourceBudgetCategoryId: string | null
+  sourceBudgetCategoryName: string | null
   editable: boolean
   removable: boolean
   createdAt: string
@@ -98,10 +100,15 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
   const sourceItems = sourceIds.length
     ? await prisma.memoryItem.findMany({
         where: { id: { in: sourceIds } },
-        select: { id: true, materialName: true, labourTask: true, summary: true, memoryType: true },
+        select: { id: true, materialName: true, labourTask: true, summary: true, memoryType: true, budgetCategoryId: true },
       })
     : []
   const sourceById = new Map(sourceItems.map((m) => [m.id, m]))
+  const categoryIds = [...new Set(sourceItems.map((item) => item.budgetCategoryId).filter((id): id is string => id !== null))]
+  const categories = categoryIds.length && prisma.jobBudgetCategory?.findMany
+    ? await prisma.jobBudgetCategory.findMany({ where: { jobId: job.id, id: { in: categoryIds } }, select: { id: true, name: true } })
+    : []
+  const categoryById = new Map(categories.map((category) => [category.id, category]))
 
   const paymentRows: MoneyRow[] = payments.map((p) => ({
     id: p.id,
@@ -117,6 +124,8 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
     sourceMemoryItemId: null,
     sourceItemLabel: null,
     sourceMemoryType: null,
+    sourceBudgetCategoryId: null,
+    sourceBudgetCategoryName: null,
     editable: true,
     removable: true,
     createdAt: p.createdAt.toISOString(),
@@ -129,6 +138,7 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
   const eventRows: MoneyRow[] = events.map((e) => {
     const direction = e.direction === 'IN' ? 'in' : 'out'
     const src = e.sourceMemoryItemId ? sourceById.get(e.sourceMemoryItemId) : undefined
+    const category = src?.budgetCategoryId ? categoryById.get(src.budgetCategoryId) : undefined
     return {
       id: e.id,
       jobId: job.id,
@@ -143,6 +153,8 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
       sourceMemoryItemId: e.sourceMemoryItemId,
       sourceItemLabel: sourceLabel(src),
       sourceMemoryType: src ? src.memoryType.toLowerCase() : null,
+      sourceBudgetCategoryId: src?.budgetCategoryId ?? null,
+      sourceBudgetCategoryName: category?.name ?? null,
       // Money events are not free-form editable in v1 (they mirror a source);
       // they can be removed as a correction.
       editable: false,
