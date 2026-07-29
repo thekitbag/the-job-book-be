@@ -134,8 +134,12 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     }
     // Field order matches the original checks so the first-reported error for
     // multi-invalid bodies is unchanged.
+    // Full-form Labour editing uses an empty rate input as an explicit clear;
+    // the service clears the complete labour cost expression while retaining
+    // hours. Other decimal validation remains unchanged.
+    const blankLabourRate = body.memoryType === 'labour' && body.costAmount === ''
     const error =
-      validateOptionalDecimal(body.costAmount, 'costAmount') ??
+      (blankLabourRate ? null : validateOptionalDecimal(body.costAmount, 'costAmount')) ??
       validateOptionalDecimal(body.totalCostAmount, 'totalCostAmount') ??
       validateOptionalCostQualifier(body.costQualifier) ??
       validateOptionalDecimal(body.labourHours, 'labourHours') ??

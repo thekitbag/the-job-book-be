@@ -58,6 +58,20 @@ export interface MemoryItemPatch {
   budgetCategoryId?: string | null
 }
 
+// A paid labour entry is protected by its effective trusted cost, not by every
+// raw input used to express it. This permits a full-form no-op (and equivalent
+// rate/hours expressions) while still blocking a change from £160 to any other
+// payable amount, £0, or an untrusted/no-cost state until Money is explicitly
+// undone.
+function trustedLabourCostAmount(
+  totalCostAmount: string | null,
+  costCurrency: string | null,
+  unresolvedFlags: string[],
+): number | null {
+  if (costCurrency !== 'GBP' || unresolvedFlags.length > 0) return null
+  return strictParsePositive(totalCostAmount)
+}
+
 // Resolve the job-local person link on a patch. Changing person never rewrites
 // an entry's rate; a client must explicitly send a rate to apply a new default.
 async function resolveLabourEntryPatch(
@@ -146,9 +160,13 @@ export async function patchMemoryItem(
   // Effective cost fields after merging patch with existing
   const effQty = 'quantity' in patch ? (patch.quantity ?? null) : existing.quantity
   const effUnit = 'unit' in patch ? (patch.unit ?? null) : existing.unit
-  const effCostAmount = 'costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount
-  const effCostCurrency = 'costCurrency' in patch ? (patch.costCurrency ?? null) : existing.costCurrency
-  const effCostQualifier = 'costQualifier' in patch ? (patch.costQualifier ?? null) : existing.costQualifier
+  // Clearing a labour rate means clearing its complete cost expression. The
+  // hours remain a useful Labour record, while Budget/Money correctly see no
+  // payable cost. Empty string is accepted from the full-form FE as a clear.
+  const clearsLabourRate = finalIsLabour && 'costAmount' in patch && (patch.costAmount == null || patch.costAmount === '')
+  const effCostAmount = clearsLabourRate ? null : ('costAmount' in patch ? (patch.costAmount ?? null) : existing.costAmount)
+  const effCostCurrency = clearsLabourRate ? null : ('costCurrency' in patch ? (patch.costCurrency ?? null) : existing.costCurrency)
+  const effCostQualifier = clearsLabourRate ? null : ('costQualifier' in patch ? (patch.costQualifier ?? null) : existing.costQualifier)
   const effLabourHours = 'labourHours' in patch ? (patch.labourHours ?? null) : existing.labourHours
 
   // Re-derive safe line total from effective fields (material each or labour per_hour)
@@ -156,11 +174,27 @@ export async function patchMemoryItem(
     deriveSafeMaterialTotal(effQty, effUnit, effCostAmount, effCostCurrency, effCostQualifier) ??
     deriveSafeLabourTotal(effLabourHours, effCostAmount, effCostQualifier)
 
-  // Explicit patch value wins; otherwise use derived or preserve existing
+  // Explicit patch value wins. A changed labour cost expression is re-derived
+  // (or cleared) rather than retaining a stale prior total. Otherwise preserve
+  // legacy/manual totals that do not have a derivable basis.
   const explicitTotalInPatch = 'totalCostAmount' in patch
-  const finalTotalCostAmount = explicitTotalInPatch
+  const labourCostExpressionChanged = finalIsLabour && (
+    clearsLabourRate ||
+    effCostAmount !== existing.costAmount ||
+    effCostCurrency !== existing.costCurrency ||
+    effCostQualifier !== existing.costQualifier ||
+    effLabourHours !== existing.labourHours
+  )
+  const derivedLabourTotal = effCostQualifier === 'total' && effCostAmount != null && STRICT_DECIMAL_RE.test(effCostAmount)
+    ? effCostAmount
+    : deriveSafeLabourTotal(effLabourHours, effCostAmount, effCostQualifier)
+  const finalTotalCostAmount = clearsLabourRate
+    ? null
+    : explicitTotalInPatch
     ? (patch.totalCostAmount ?? null)
-    : (derived !== null ? derived : existing.totalCostAmount)
+    : finalIsLabour && labourCostExpressionChanged
+      ? derivedLabourTotal
+      : (derived !== null ? derived : existing.totalCostAmount)
 
   // Recompute cost_uncertain based on final effective data
   const conflict = hasCostConflict(effQty, effCostAmount, effCostQualifier, finalTotalCostAmount)
@@ -175,11 +209,10 @@ export async function patchMemoryItem(
 
   const labourData = await resolveLabourEntryPatch(jobId, finalIsLabour, patch, existing)
 
-  const costChanged =
-    effCostAmount !== existing.costAmount || effCostCurrency !== existing.costCurrency ||
-    effCostQualifier !== existing.costQualifier || effLabourHours !== existing.labourHours ||
-    finalTotalCostAmount !== existing.totalCostAmount
-  if (finalIsLabour && costChanged && prisma.jobMoneyEvent && typeof prisma.jobMoneyEvent.findFirst === 'function') {
+  const existingTrustedCost = trustedLabourCostAmount(existing.totalCostAmount, existing.costCurrency, existing.unresolvedFlags)
+  const finalTrustedCost = trustedLabourCostAmount(finalTotalCostAmount, effCostCurrency, unresolvedFlags)
+  const paidCostChanged = existingTrustedCost !== finalTrustedCost
+  if (finalIsLabour && paidCostChanged && prisma.jobMoneyEvent && typeof prisma.jobMoneyEvent.findFirst === 'function') {
     const paid = await prisma.jobMoneyEvent.findFirst({ where: { jobId, sourceMemoryItemId: memoryItemId, kind: 'COST_PAID', isDeleted: false } })
     if (paid) throw { code: ErrorCode.INVALID_FIELD, message: 'Undo paid before changing a labour cost amount' }
   }
@@ -197,9 +230,9 @@ export async function patchMemoryItem(
       supplierName: 'supplierName' in patch ? patch.supplierName ?? null : existing.supplierName,
       deliveryTiming: 'deliveryTiming' in patch ? patch.deliveryTiming ?? null : existing.deliveryTiming,
       locationOrUse: 'locationOrUse' in patch ? patch.locationOrUse ?? null : existing.locationOrUse,
-      costAmount: 'costAmount' in patch ? patch.costAmount ?? null : existing.costAmount,
-      costCurrency: 'costCurrency' in patch ? patch.costCurrency ?? null : existing.costCurrency,
-      costQualifier: 'costQualifier' in patch ? patch.costQualifier ?? null : existing.costQualifier,
+      costAmount: effCostAmount,
+      costCurrency: effCostCurrency,
+      costQualifier: effCostQualifier,
       totalCostAmount: finalTotalCostAmount,
       labourBudgetEnabled: finalIsLabour && strictParsePositive(finalTotalCostAmount) !== null && effCostCurrency === 'GBP' && unresolvedFlags.length === 0,
       labourHours: 'labourHours' in patch ? patch.labourHours ?? null : existing.labourHours,
