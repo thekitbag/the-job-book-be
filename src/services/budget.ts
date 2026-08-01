@@ -249,10 +249,16 @@ export async function getBudgetSummary(jobId: string, userId: string) {
   // assigned to a category they still prevent a misleading all-clear payment
   // state, except trusted £0 which is deliberately no-cost rather than missing.
   const missingPriceCategoryIds = new Set<string>()
+  let hasMissingPriceAttention = false
   for (const item of items) {
-    if (item.budgetCategoryId === null || isTrustedZeroCost(item)) continue
+    // Returned-material refunds are Money-in adjustments, not a missing source
+    // cost. Trusted £0 is likewise deliberately no-cost rather than unknown.
+    if (item.memoryType === 'RETURNED_MATERIAL' || isTrustedZeroCost(item)) continue
     const classified = classifySpend(item)
-    if (classified.kind === 'excluded') missingPriceCategoryIds.add(item.budgetCategoryId)
+    if (classified.kind === 'excluded') {
+      hasMissingPriceAttention = true
+      if (item.budgetCategoryId !== null) missingPriceCategoryIds.add(item.budgetCategoryId)
+    }
   }
 
   // Trusted refunds from returned materials: strict positive GBP refund, no
@@ -337,6 +343,15 @@ export async function getBudgetSummary(jobId: string, userId: string) {
   const totalSpendNum = sumRows([...categorySummaries.flatMap((s) => s.rows), ...uncategorizedRows])
   const anySpend = safe.length > 0
 
+  // Overall payment context is deliberately owned here, alongside the source
+  // cost classifier. Money's active COST_PAID events say which known payable
+  // rows have moved; they never change Budget arithmetic.
+  const unpaidSafeRows = safe.filter((row) => !paidEventByItem.has(row.memoryItemId))
+  const hasKnownPayableCosts = safe.length > 0
+  const notPaidNum = sumRows(unpaidSafeRows.map((row) => toSpendRow(row, paidEventByItem.get(row.memoryItemId))))
+  const notPaidAmount = hasKnownPayableCosts ? String(round2(notPaidNum)) : null
+  const allKnownCostsPaid = hasKnownPayableCosts && unpaidSafeRows.length === 0
+
   const totalBudgetAmount = anyBudget ? String(round2(totalBudgetNum)) : null
   const totalSpendAmount = anySpend ? String(round2(totalSpendNum)) : null
 
@@ -381,6 +396,12 @@ export async function getBudgetSummary(jobId: string, userId: string) {
       knownRefundLabel: knownRefundAmount !== null ? `${gbp(knownRefundAmount)} refunded` : null,
       netKnownSpendAmount,
       netKnownSpendCurrency: anySpend || anyRefund ? 'GBP' : null,
+      notPaidAmount,
+      notPaidCurrency: notPaidAmount !== null ? 'GBP' : null,
+      notPaidLabel: notPaidAmount === null ? null : allKnownCostsPaid ? 'All known costs paid' : `${gbp(notPaidAmount)} not paid`,
+      allKnownCostsPaid,
+      hasKnownPayableCosts,
+      hasMissingPriceAttention,
       remainingAmount,
       remainingLabel,
       overBudget,

@@ -92,6 +92,32 @@ describe('category payment state', () => {
       expect.objectContaining({ eligibleForPaymentState: true, paymentState: 'not_paid', paidMoneyEventId: null, paidAt: null }),
     ]))
     expect(summary.totals.knownSpendAmount).toBe('270')
+    expect(summary.totals).toMatchObject({
+      notPaidAmount: '110', notPaidCurrency: 'GBP', notPaidLabel: '£110 not paid',
+      allKnownCostsPaid: false, hasKnownPayableCosts: true, hasMissingPriceAttention: true,
+    })
+  })
+
+  it('includes uncategorized known cost, distinguishes all-paid, and omits the line when nothing is payable', async () => {
+    const paidCategory = await category('Paid category')
+    await material(paidCategory.id, '60', true)
+    const uncategorized = await post(memoryUrl(), {
+      memoryType: 'ordered_material', summary: 'Uncategorised timber', materialName: 'Timber', costAmount: '40', costCurrency: 'GBP', costQualifier: 'total',
+    })
+    expect(uncategorized.statusCode).toBe(201)
+    let summary = (await get(budgetUrl())).json()
+    expect(summary.totals).toMatchObject({ notPaidAmount: '40', notPaidLabel: '£40 not paid', allKnownCostsPaid: false, hasKnownPayableCosts: true })
+    const paid = await post(`/api/jobs/${jobId}/money/out`, { sourceMemoryItemId: uncategorized.json().id })
+    expect(paid.statusCode).toBe(200)
+    summary = (await get(budgetUrl())).json()
+    expect(summary.totals).toMatchObject({ notPaidAmount: '0', notPaidCurrency: 'GBP', notPaidLabel: 'All known costs paid', allKnownCostsPaid: true, hasKnownPayableCosts: true })
+
+    const emptyJob = await prisma.job.create({ data: { ownerUserId: ownerId, title: 'No payable costs', jobType: 'garden_room' } })
+    const noPayable = (await get(`/api/jobs/${emptyJob.id}/budget-summary`)).json()
+    expect(noPayable.totals).toMatchObject({
+      notPaidAmount: null, notPaidCurrency: null, notPaidLabel: null,
+      allKnownCostsPaid: false, hasKnownPayableCosts: false, hasMissingPriceAttention: false,
+    })
   })
 
   it('marks a material paid and undoes it without changing its Budget row or totals', async () => {
@@ -103,7 +129,11 @@ describe('category payment state', () => {
     expect(paid.statusCode).toBe(200)
     const afterPaid = (await get(budgetUrl())).json()
     const paidCategory = afterPaid.categories.find((entry: any) => entry.category.id === cat.id)
-    expect(afterPaid.totals).toEqual(before.totals)
+    expect(afterPaid.totals).toMatchObject({
+      budgetAmount: before.totals.budgetAmount, knownSpendAmount: before.totals.knownSpendAmount,
+      netKnownSpendAmount: before.totals.netKnownSpendAmount, remainingAmount: before.totals.remainingAmount,
+      overBudget: before.totals.overBudget, notPaidAmount: '0', notPaidLabel: 'All known costs paid',
+    })
     expect(paidCategory.knownSpendAmount).toBe(beforeCategory.knownSpendAmount)
     expect(paidCategory.rows[0]).toMatchObject({ memoryItemId: source.id, paymentState: 'paid', paidMoneyEventId: expect.any(String) })
     const money = (await get(moneyUrl())).json()
