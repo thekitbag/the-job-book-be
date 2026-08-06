@@ -82,7 +82,7 @@ beforeEach(async () => {
   vi.mocked(prisma.user.findMany as any).mockResolvedValue([admin(), makeUser()])
   vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
   vi.mocked(prisma.job.findMany as any).mockResolvedValue([
-    { ...makeJob(), _count: { rawNotes: 0, memoryItems: 0, photos: 0 } },
+    { ...makeJob(), _count: { rawNotes: 0, memoryItems: 0 } },
   ])
   vi.mocked(prisma.rawNote.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.rawNote.groupBy as any).mockResolvedValue([])
@@ -174,9 +174,12 @@ describe('GET /api/internal/support/users/:targetUserId/jobs', () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.job.findMany as any).mockResolvedValue([{
       ...makeJob(),
-      _count: { rawNotes: 3, memoryItems: 2, photos: 1 },
+      _count: { rawNotes: 3, memoryItems: 2 },
     }])
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
+    // The photo count is queried separately and scoped to kind PHOTO, so
+    // receipt/invoice evidence never inflates it.
+    vi.mocked(prisma.jobPhoto.findMany as any).mockResolvedValue([{ jobId: JOB_ID }])
     const res = await app.inject({ method: 'GET', url: `/api/internal/support/users/${PILOT_ID}/jobs`, headers: asAdmin })
     expect(res.statusCode).toBe(200)
     const body = res.json()

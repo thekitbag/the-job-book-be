@@ -149,6 +149,10 @@ export async function createJobPhoto(input: CreateJobPhotoInput, storage: AudioS
         id: photoId,
         jobId: input.jobId,
         uploadedByUserId: input.userId,
+        // Classification follows the upload flow, not the file format: this
+        // route is "Add photo", so the row is always a PHOTO.
+        kind: 'PHOTO',
+        fileKind: 'IMAGE',
         descriptor,
         storageKey: stored.key,
         bucket: stored.bucket,
@@ -168,10 +172,12 @@ export async function createJobPhoto(input: CreateJobPhotoInput, storage: AudioS
   }
 }
 
+// Photos only. Receipt/invoice evidence lives in the same table with
+// kind = RECEIPT and must never appear here, including receipt images.
 export async function listJobPhotos(jobId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
   const photos = await prisma.jobPhoto.findMany({
-    where: { jobId, isDeleted: false },
+    where: { jobId, kind: 'PHOTO', isDeleted: false },
     include: LINKED_INCLUDE,
     orderBy: [{ uploadedAt: 'desc' }, { createdAt: 'desc' }],
   })
@@ -185,7 +191,9 @@ export async function getJobPhotoFile(
   storage: AudioStorageProvider,
 ) {
   await verifyJobOwnership(jobId, userId)
-  const photo = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
+  const photo = await prisma.jobPhoto.findFirst({
+    where: { id: photoId, jobId, kind: 'PHOTO', isDeleted: false },
+  })
   if (!photo) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
 
   let bytes: Buffer
@@ -213,7 +221,9 @@ export async function patchJobPhoto(
   patch: PatchJobPhotoInput,
 ) {
   await verifyJobOwnership(jobId, userId)
-  const existing = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
+  const existing = await prisma.jobPhoto.findFirst({
+    where: { id: photoId, jobId, kind: 'PHOTO', isDeleted: false },
+  })
   if (!existing) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
 
   const descriptor =
@@ -246,7 +256,9 @@ export async function patchJobPhoto(
 // Deleting an already-deleted photo is 404.
 export async function deleteJobPhoto(jobId: string, photoId: string, userId: string) {
   await verifyJobOwnership(jobId, userId)
-  const existing = await prisma.jobPhoto.findFirst({ where: { id: photoId, jobId, isDeleted: false } })
+  const existing = await prisma.jobPhoto.findFirst({
+    where: { id: photoId, jobId, kind: 'PHOTO', isDeleted: false },
+  })
   if (!existing) throw { code: ErrorCode.PHOTO_NOT_FOUND, message: 'Photo not found' }
 
   await prisma.jobPhoto.update({

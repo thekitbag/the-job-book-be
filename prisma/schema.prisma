@@ -408,11 +408,31 @@ model JobBudgetCategory {
   @@map("job_budget_categories")
 }
 
+// Job evidence classification. `kind` follows Mike's intent at upload time,
+// not the file format: an image uploaded through "Add receipt or invoice" is
+// RECEIPT and must never surface in the Photos list. Existing rows default to
+// PHOTO so nothing is silently reclassified.
+enum JobEvidenceKind {
+  PHOTO
+  RECEIPT
+}
+
+enum JobEvidenceFileKind {
+  IMAGE
+  PDF
+}
+
+// Job evidence: photos (kind PHOTO) and receipts/invoices (kind RECEIPT) share
+// this table and the private object-storage path. The table name stays
+// `job_photos` for compatibility.
 model JobPhoto {
   id                 String   @id @default(uuid())
   jobId              String
   uploadedByUserId   String
+  kind               JobEvidenceKind     @default(PHOTO)
+  fileKind           JobEvidenceFileKind @default(IMAGE)
   descriptor         String?
+  originalFileName   String?
   storageKey         String   @unique
   bucket             String
   mimeType           String
@@ -435,6 +455,7 @@ model JobPhoto {
   @@index([jobId, linkedNoteId])
   @@index([jobId, linkedMemoryItemId])
   @@index([jobId, isDeleted])
+  @@index([jobId, kind, isDeleted])
   @@map("job_photos")
 }
 
