@@ -22,12 +22,24 @@ const ACCEPTED_RECEIPT_MIME_TYPES = new Map<string, 'IMAGE' | 'PDF'>([
   ['application/pdf', 'PDF'],
 ])
 
-function baseMimeType(mimeType: string): string {
-  return mimeType.toLowerCase().split(';')[0].trim()
-}
+// Phone PDF uploads (iOS Safari / the Files provider) frequently arrive with a
+// generic or missing type instead of application/pdf. These declared types are
+// treated as "unknown, might be a PDF" and are accepted only when the bytes
+// actually start with %PDF-.
+// `text/plain` is in here because busboy substitutes it when a multipart part
+// carries no Content-Type at all, which is one of the shapes phone uploads
+// take; it is not a claim that text files are receipts. Nothing in this set is
+// accepted on the strength of its declared type — only on %PDF- bytes.
+const UNKNOWN_MIME_TYPES = new Set([
+  '',
+  'application/octet-stream',
+  'binary/octet-stream',
+  'application/x-pdf',
+  'text/plain',
+])
 
-export function isSupportedReceiptMimeType(mimeType: string): boolean {
-  return ACCEPTED_RECEIPT_MIME_TYPES.has(baseMimeType(mimeType))
+function baseMimeType(mimeType: string | null | undefined): string {
+  return (mimeType ?? '').toLowerCase().split(';')[0].trim()
 }
 
 export function receiptFileKind(mimeType: string): 'IMAGE' | 'PDF' | null {
@@ -52,6 +64,50 @@ function detectFileFamily(buffer: Buffer): 'PDF' | 'IMAGE' | null {
   // ISO base media (HEIC/HEIF): "ftyp" box brand at offset 4.
   if (buffer.length >= 12 && buffer.subarray(4, 8).toString('latin1') === 'ftyp') return 'IMAGE'
   return null
+}
+
+// Decide what a receipt upload actually is, and normalise the type we store.
+//
+// Images are unchanged: the declared type must be one we accept, and it must
+// not contradict a recognised signature.
+//
+// PDFs are tolerant of the phone path. A declared application/pdf is accepted
+// as before; a generic or missing type (octet-stream, application/x-pdf, no
+// type at all) is accepted only if the bytes start with %PDF-, and is then
+// stored as application/pdf / PDF. Magic bytes — not the file extension — are
+// the gate, so a PDF saved without a .pdf name still uploads; the original
+// file name is preserved as given (safely normalised) rather than rewritten.
+// An octet-stream upload whose bytes are not a PDF is always rejected.
+export function resolveReceiptFileType(
+  declaredMimeType: string | null | undefined,
+  fileBuffer: Buffer,
+): { mimeType: string; fileKind: 'IMAGE' | 'PDF' } {
+  const base = baseMimeType(declaredMimeType)
+  const detected = detectFileFamily(fileBuffer)
+  const declaredKind = ACCEPTED_RECEIPT_MIME_TYPES.get(base)
+
+  if (declaredKind) {
+    if (detected && detected !== declaredKind) {
+      throw {
+        code: ErrorCode.RECEIPT_UNSUPPORTED_TYPE,
+        message: `File contents do not match the declared type: ${base}`,
+      }
+    }
+    return { mimeType: base, fileKind: declaredKind }
+  }
+
+  if (UNKNOWN_MIME_TYPES.has(base)) {
+    if (detected === 'PDF') return { mimeType: 'application/pdf', fileKind: 'PDF' }
+    throw {
+      code: ErrorCode.RECEIPT_UNSUPPORTED_TYPE,
+      message: 'Unsupported receipt file: expected an image or a PDF',
+    }
+  }
+
+  throw {
+    code: ErrorCode.RECEIPT_UNSUPPORTED_TYPE,
+    message: `Unsupported receipt type: ${base}`,
+  }
 }
 
 async function verifyJobOwnership(jobId: string, userId: string) {
@@ -137,21 +193,12 @@ export interface CreateJobReceiptInput {
 export async function createJobReceipt(input: CreateJobReceiptInput, storage: AudioStorageProvider) {
   await verifyJobOwnership(input.jobId, input.userId)
 
-  const fileKind = receiptFileKind(input.mimeType)
-  if (!fileKind) {
-    throw { code: ErrorCode.RECEIPT_UNSUPPORTED_TYPE, message: `Unsupported receipt type: ${input.mimeType}` }
-  }
+  // Size first: a huge file should not be sniffed or stored.
   if (input.fileBuffer.byteLength > MAX_RECEIPT_BYTES) {
     throw { code: ErrorCode.RECEIPT_TOO_LARGE, message: 'Receipt exceeds max size' }
   }
 
-  const detected = detectFileFamily(input.fileBuffer)
-  if (detected && detected !== fileKind) {
-    throw {
-      code: ErrorCode.RECEIPT_UNSUPPORTED_TYPE,
-      message: `File contents do not match the declared type: ${input.mimeType}`,
-    }
-  }
+  const { mimeType, fileKind } = resolveReceiptFileType(input.mimeType, input.fileBuffer)
 
   const descriptor = normalizeDescriptor(input.descriptor)
   const originalFileName = normalizeOriginalFileName(input.originalFileName)
@@ -160,7 +207,7 @@ export async function createJobReceipt(input: CreateJobReceiptInput, storage: Au
   const receiptId = randomUUID()
   const storageKey = `jobs/${input.jobId}/receipts/${receiptId}`
 
-  const stored = await storage.store(storageKey, input.fileBuffer, input.mimeType)
+  const stored = await storage.store(storageKey, input.fileBuffer, mimeType)
 
   try {
     const created = await prisma.jobPhoto.create({
@@ -174,7 +221,9 @@ export async function createJobReceipt(input: CreateJobReceiptInput, storage: Au
         originalFileName,
         storageKey: stored.key,
         bucket: stored.bucket,
-        mimeType: baseMimeType(input.mimeType),
+        // Normalised, not as declared: a phone PDF sniffed out of
+        // octet-stream is stored and served as application/pdf.
+        mimeType,
         sizeBytes: input.fileBuffer.byteLength,
       },
     })

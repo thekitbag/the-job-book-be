@@ -62,7 +62,9 @@ async function signupCookie(local: string): Promise<{ id: string; cookie: string
 
 function multipartForm(opts?: {
   fields?: Record<string, string>
-  file?: { buffer: Buffer; mimeType: string; filename?: string } | null
+  // mimeType null omits the part's Content-Type header entirely, as some
+  // phone/file-provider uploads do.
+  file?: { buffer: Buffer; mimeType: string | null; filename?: string } | null
   fieldName?: string
 }) {
   const boundary = 'ReceiptTestBoundary9z8y7x'
@@ -74,9 +76,10 @@ function multipartForm(opts?: {
     opts?.file === undefined ? { buffer: JPEG_BYTES, mimeType: 'image/jpeg' } : opts.file
   if (file) {
     const filename = file.filename ?? 'till-receipt.jpg'
+    const typeHeader = file.mimeType === null ? '' : `Content-Type: ${file.mimeType}\r\n`
     parts.push(
       Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${opts?.fieldName ?? 'file'}"; filename="${filename}"\r\nContent-Type: ${file.mimeType}\r\n\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="${opts?.fieldName ?? 'file'}"; filename="${filename}"\r\n${typeHeader}\r\n`,
       ),
     )
     parts.push(file.buffer)
@@ -302,6 +305,106 @@ describe('POST /api/jobs/:jobId/receipts', () => {
     const forbidden = await uploadReceipt(undefined, cookieB)
     expect(forbidden.statusCode).toBe(403)
     expect(forbidden.json().code).toBe('FORBIDDEN')
+  })
+})
+
+// iOS Safari / the Files provider often hands us a PDF with a generic or
+// missing Content-Type. Magic bytes are the gate, and the stored type is
+// normalised so the file still opens as a PDF later.
+describe('POST /api/jobs/:jobId/receipts — phone PDF uploads', () => {
+  it('accepts a .pdf filename sent as application/octet-stream with %PDF- bytes', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: PDF_BYTES, mimeType: 'application/octet-stream', filename: 'invoice-9912.pdf' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({
+      kind: 'receipt',
+      fileKind: 'pdf',
+      mimeType: 'application/pdf',
+      originalFileName: 'invoice-9912.pdf',
+    })
+    expect(res.json().thumbnailUrl).toBeNull()
+  })
+
+  it('accepts a .pdf filename sent with no Content-Type at all', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: PDF_BYTES, mimeType: null, filename: 'scan.pdf' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({ fileKind: 'pdf', mimeType: 'application/pdf' })
+  })
+
+  it('accepts application/x-pdf with %PDF- bytes', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: PDF_BYTES, mimeType: 'application/x-pdf', filename: 'receipt.pdf' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({ fileKind: 'pdf', mimeType: 'application/pdf' })
+  })
+
+  it('rejects a .pdf filename sent as octet-stream when the bytes are not a PDF', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: Buffer.from('this is not a pdf at all'), mimeType: 'application/octet-stream', filename: 'invoice.pdf' },
+    })
+    expect(res.statusCode).toBe(415)
+    expect(res.json().code).toBe('RECEIPT_UNSUPPORTED_TYPE')
+    expect(await prisma.jobPhoto.count({ where: { jobId } })).toBe(0)
+  })
+
+  it('rejects an arbitrary octet-stream upload', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: Buffer.from('PKzip-ish'), mimeType: 'application/octet-stream', filename: 'stuff.zip' },
+    })
+    expect(res.statusCode).toBe(415)
+    expect(res.json().code).toBe('RECEIPT_UNSUPPORTED_TYPE')
+  })
+
+  // Documented choice: magic bytes decide, not the extension, so a PDF saved
+  // under any name still uploads. The original file name is preserved as
+  // given (path-stripped and length-bounded), never rewritten to .pdf.
+  it('accepts PDF bytes under a non-pdf filename and preserves that filename', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: PDF_BYTES, mimeType: 'application/octet-stream', filename: '../scan 2026-08-06' },
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json()).toMatchObject({
+      fileKind: 'pdf',
+      mimeType: 'application/pdf',
+      originalFileName: 'scan 2026-08-06',
+    })
+  })
+
+  it('serves a sniffed phone PDF back as application/pdf', async () => {
+    const id = (
+      await uploadReceipt({
+        file: { buffer: PDF_BYTES, mimeType: 'application/octet-stream', filename: 'invoice.pdf' },
+      })
+    ).json().id
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/jobs/${jobId}/receipts/${id}/file`,
+      headers: { cookie: cookieA },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toBe('application/pdf')
+    expect(res.rawPayload.equals(PDF_BYTES)).toBe(true)
+  })
+
+  it('still rejects a genuine text file', async () => {
+    const res = await uploadReceipt({
+      file: { buffer: Buffer.from('just some site notes'), mimeType: 'text/plain', filename: 'notes.txt' },
+    })
+    expect(res.statusCode).toBe(415)
+    expect(res.json().code).toBe('RECEIPT_UNSUPPORTED_TYPE')
+  })
+
+  it('still rejects an image sent as octet-stream', async () => {
+    // Image validation is unchanged: images must declare a supported image type.
+    const res = await uploadReceipt({
+      file: { buffer: JPEG_BYTES, mimeType: 'application/octet-stream', filename: 'photo.jpg' },
+    })
+    expect(res.statusCode).toBe(415)
+    expect(res.json().code).toBe('RECEIPT_UNSUPPORTED_TYPE')
   })
 })
 

@@ -56,7 +56,9 @@ const receiptsRoutes: FastifyPluginAsync<ReceiptsRouteOptions> = async (fastify,
           }
         }
 
-        if (!fileBuffer || fileBuffer.byteLength === 0 || !mimeType) {
+        // A missing type is not a missing file — phone uploads can arrive with
+        // no Content-Type at all, and the service sniffs those.
+        if (!fileBuffer || fileBuffer.byteLength === 0) {
           return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'file is required' })
         }
 
@@ -65,7 +67,7 @@ const receiptsRoutes: FastifyPluginAsync<ReceiptsRouteOptions> = async (fastify,
             jobId,
             userId: request.userId,
             fileBuffer,
-            mimeType,
+            mimeType: mimeType ?? '',
             descriptor: descriptor ?? null,
             originalFileName: originalFileName ?? null,
           },
