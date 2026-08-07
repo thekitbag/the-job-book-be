@@ -21,6 +21,7 @@ import memoryViewRoutes from './routes/memory-view.js'
 import memoryItemsRoutes from './routes/memory-items.js'
 import budgetRoutes from './routes/budget.js'
 import photosRoutes from './routes/photos.js'
+import receiptsRoutes from './routes/receipts.js'
 import supportRoutes from './routes/support.js'
 import paymentsRoutes from './routes/payments.js'
 import moneyRoutes from './routes/money.js'
@@ -82,6 +83,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(memoryItemsRoutes)
   fastify.register(budgetRoutes)
   fastify.register(photosRoutes, { storage })
+  fastify.register(receiptsRoutes, { storage })
   fastify.register(supportRoutes, { storage })
   fastify.register(paymentsRoutes)
   fastify.register(moneyRoutes)
@@ -91,10 +93,13 @@ export function buildApp(opts: AppOptions = {}) {
   // which bypasses route try/catch and lands here. Remap to our stable error code.
   fastify.setErrorHandler((error: Error & { code?: string; statusCode?: number }, request, reply) => {
     if (error.code === 'FST_REQ_FILE_TOO_LARGE') {
-      // Photo uploads share the multipart plugin; keep the photo error code
-      // stable when a photo blows past the global multipart limit too.
+      // Photo and receipt uploads share the multipart plugin; keep their error
+      // codes stable when they blow past the global multipart limit too.
       if (request.url.includes('/photos')) {
         return reply.code(413).send({ code: 'PHOTO_TOO_LARGE', message: 'Photo exceeds max size' })
+      }
+      if (request.url.includes('/receipts')) {
+        return reply.code(413).send({ code: 'RECEIPT_TOO_LARGE', message: 'Receipt exceeds max size' })
       }
       return reply.code(413).send({ code: 'AUDIO_TOO_LARGE', message: 'Audio exceeds max size' })
     }

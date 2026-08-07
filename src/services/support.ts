@@ -157,10 +157,10 @@ export async function listSupportUsers(adminUserId: string) {
 export async function listSupportUserJobs(adminUserId: string, targetUserId: string) {
   const user = await requireTargetUser(targetUserId)
 
-  const [jobs, unresolvedFacts] = await Promise.all([
+  const [jobs, unresolvedFacts, photoRows] = await Promise.all([
     prisma.job.findMany({
       where: { ownerUserId: targetUserId },
-      include: { _count: { select: { rawNotes: true, memoryItems: true, photos: true } } },
+      include: { _count: { select: { rawNotes: true, memoryItems: true } } },
       orderBy: { updatedAt: 'desc' },
     }),
     // "Review items" = unresolved candidate facts awaiting review.
@@ -168,10 +168,18 @@ export async function listSupportUserJobs(adminUserId: string, targetUserId: str
       where: { job: { ownerUserId: targetUserId }, status: { in: ['DRAFT', 'UNCLEAR'] } },
       select: { jobId: true },
     }),
+    // Photos only — receipt/invoice evidence shares the table but is not a photo.
+    prisma.jobPhoto.findMany({
+      where: { job: { ownerUserId: targetUserId }, kind: 'PHOTO' },
+      select: { jobId: true },
+    }),
   ])
 
   const reviewCounts = new Map<string, number>()
   for (const f of unresolvedFacts) reviewCounts.set(f.jobId, (reviewCounts.get(f.jobId) ?? 0) + 1)
+
+  const photoCounts = new Map<string, number>()
+  for (const p of photoRows) photoCounts.set(p.jobId, (photoCounts.get(p.jobId) ?? 0) + 1)
 
   await writeAudit({ adminUserId, action: SUPPORT_AUDIT_ACTIONS.userJobsViewed, targetUserId })
 
@@ -190,7 +198,7 @@ export async function listSupportUserJobs(adminUserId: string, targetUserId: str
         notes: j._count.rawNotes,
         memoryItems: j._count.memoryItems,
         reviewItems: reviewCounts.get(j.id) ?? 0,
-        photos: j._count.photos,
+        photos: photoCounts.get(j.id) ?? 0,
       },
     })),
   }
