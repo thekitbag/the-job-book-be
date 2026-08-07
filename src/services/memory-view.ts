@@ -10,7 +10,7 @@ import {
 } from '../lib/cost-utils.js'
 import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { SpendClassifiable } from '../lib/spend-classification.js'
-import { MEMORY_TYPES } from '../lib/memory-types.js'
+import { MEMORY_TYPES, isCategoryAssignableMemoryType } from '../lib/memory-types.js'
 import { ukLocalDayString } from '../lib/dates.js'
 
 // Trusted-memory sections come from the shared registry; UNCLEAR is excluded
@@ -611,6 +611,9 @@ export async function getMemoryView(jobId: string, userId: string) {
         happenedAt: m.happenedAt,
         isManual: m.isManual,
         budgetCategoryId: m.budgetCategoryId,
+        // Whether Fix memory may offer a Budget category for this item, read
+        // from the memory-type registry so clients never hard-code the list.
+        canAssignBudgetCategory: isCategoryAssignableMemoryType(m.memoryType as string),
         returnedFromMemoryItemId: m.returnedFromMemoryItemId,
         refundAmount: m.refundAmount,
         refundCurrency: m.refundCurrency,
