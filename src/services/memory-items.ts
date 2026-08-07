@@ -120,7 +120,7 @@ export async function patchMemoryItem(
       budgetCategoryId = null
     } else {
       if (!isCategoryAssignableMemoryType(finalMemoryType)) {
-        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
+        throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material, labour, or budget_cost memory' }
       }
       await assertAssignableCategory(jobId, patch.budgetCategoryId)
       budgetCategoryId = patch.budgetCategoryId
@@ -545,6 +545,9 @@ function normalizeMemoryItem(
     happenedAt: item.happenedAt,
     isManual: item.isManual,
     budgetCategoryId: item.budgetCategoryId,
+    // Whether Fix memory may offer a Budget category for this item, read from
+    // the memory-type registry so clients never hard-code the list.
+    canAssignBudgetCategory: isCategoryAssignableMemoryType(item.memoryType),
     returnedFromMemoryItemId: item.returnedFromMemoryItemId,
     refundAmount: item.refundAmount,
     refundCurrency: item.refundCurrency,
@@ -700,7 +703,7 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   let budgetCategoryId: string | null = null
   if (input.budgetCategoryId != null) {
     if (!isCategoryAssignableMemoryType(memoryType)) {
-      throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
+      throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material, labour, or budget_cost memory' }
     }
     await assertAssignableCategory(jobId, input.budgetCategoryId)
     budgetCategoryId = input.budgetCategoryId
