@@ -197,7 +197,7 @@ async function resolveDecisionCategory(
   if (provided === undefined || provided === null) return null
 
   if (!isCategoryAssignableApiMemoryType(finalMemoryType)) {
-    throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material or labour memory' }
+    throw { code: ErrorCode.INVALID_FIELD, message: 'budgetCategoryId is only allowed on ordered_material, labour, or budget_cost memory' }
   }
   await assertAssignableCategory(jobId, provided)
   return provided
