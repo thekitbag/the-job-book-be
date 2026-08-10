@@ -21,8 +21,36 @@ model User {
   passwordResetTokens PasswordResetToken[]
   uploadedPhotos      JobPhoto[]
   supportAuditEvents  SupportAuditEvent[]
+  createdJobContacts  JobContact[]
 
   @@map("users")
+}
+
+// Job-local contacts: who is involved in one job (customer, building control,
+// the electrician). Job context, not CRM — deliberately not global, not
+// reusable across jobs, and never created from voice extraction. Soft-deleted
+// so a removal stays auditable.
+model JobContact {
+  id              String    @id @default(uuid())
+  jobId           String
+  createdByUserId String
+  name            String
+  role            String?
+  phone           String?
+  email           String?
+  note            String?
+  sortOrder       Int       @default(0)
+  isDeleted       Boolean   @default(false)
+  deletedAt       DateTime?
+  deletedByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  job       Job  @relation(fields: [jobId], references: [id])
+  createdBy User @relation(fields: [createdByUserId], references: [id])
+
+  @@index([jobId, isDeleted, sortOrder])
+  @@map("job_contacts")
 }
 
 model LabourPerson {
@@ -69,6 +97,7 @@ model Job {
   jobType               String
   status                JobStatus @default(PLANNING)
   roughLocationOrLabel  String?
+  siteAddress           String?
   notes                 String?
   customerTotalAmount   String?
   customerTotalCurrency String?
@@ -86,6 +115,7 @@ model Job {
   payments         JobPayment[]
   moneyEvents      JobMoneyEvent[]
   labourPeople     LabourPerson[]
+  contacts         JobContact[]
 
   @@map("jobs")
 }

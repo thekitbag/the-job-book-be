@@ -7,6 +7,7 @@ const JOB_SELECT = {
   jobType: true,
   status: true,
   roughLocationOrLabel: true,
+  siteAddress: true,
   createdAt: true,
   updatedAt: true,
 } as const
@@ -17,6 +18,7 @@ function normalizeJob(job: {
   jobType: string
   status: string
   roughLocationOrLabel: string | null
+  siteAddress: string | null
   createdAt: Date
   updatedAt: Date
 }) {
@@ -26,6 +28,7 @@ function normalizeJob(job: {
     jobType: job.jobType,
     status: job.status.toLowerCase(),
     roughLocationOrLabel: job.roughLocationOrLabel,
+    siteAddress: job.siteAddress,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   }

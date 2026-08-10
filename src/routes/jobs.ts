@@ -79,6 +79,7 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.MONEY_EVENT_ALREADY_EXISTS]: 400,
   [ErrorCode.LABOUR_PERSON_NOT_FOUND]: 404,
   [ErrorCode.LABOUR_PERSON_ALREADY_EXISTS]: 400,
+  [ErrorCode.JOB_CONTACT_NOT_FOUND]: 404,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {
