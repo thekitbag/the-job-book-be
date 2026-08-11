@@ -57,11 +57,14 @@ export async function getCurrentJob(userId: string) {
   throw { code: ErrorCode.JOB_NOT_FOUND, message: 'No active job found' }
 }
 
+// Book Home and All Jobs group this list client-side, so ordering only has to
+// be stable: most recently touched first, id as the tie-break so equal
+// timestamps never shuffle between requests.
 export async function listJobs(userId: string) {
   const jobs = await prisma.job.findMany({
     where: { ownerUserId: userId, status: { in: [...VISIBLE_JOB_STATUSES] } },
     select: JOB_SELECT,
-    orderBy: { updatedAt: 'desc' },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
   })
   return jobs.map(normalizeJob)
 }
@@ -81,21 +84,54 @@ export async function getJob(jobId: string, userId: string) {
 }
 
 export const MAX_JOB_TITLE_LENGTH = 80
+export const MAX_JOB_LOCATION_LENGTH = 160
 
-export async function createJob(userId: string, title: unknown, jobType: unknown) {
-  const trimmedTitle = typeof title === 'string' ? title.trim() : ''
+// New Job is a command, not a lifecycle decision: a job Mike adds is running
+// unless he says it is only being planned. Finished/archived are corrections
+// made later through PATCH, never a starting state.
+const CREATABLE_JOB_STATUSES = new Set(['planning', 'started'])
+const DEFAULT_CREATE_JOB_STATUS = 'started'
+
+export async function createJob(
+  userId: string,
+  input: { title?: unknown; jobType?: unknown; roughLocationOrLabel?: unknown; status?: unknown },
+) {
+  const trimmedTitle = typeof input.title === 'string' ? input.title.trim() : ''
   if (!trimmedTitle) throw { code: ErrorCode.MISSING_FIELD, message: 'title is required' }
   if (trimmedTitle.length > MAX_JOB_TITLE_LENGTH) throw { code: ErrorCode.INVALID_FIELD, message: 'title must be 80 characters or fewer' }
 
-  const resolvedJobType = jobType === undefined || jobType === null ? 'other' : jobType
+  const resolvedJobType = input.jobType === undefined || input.jobType === null ? 'other' : input.jobType
   if (typeof resolvedJobType !== 'string' || !ALLOWED_JOB_TYPES.has(resolvedJobType)) {
     throw { code: ErrorCode.INVALID_FIELD, message: 'jobType must be garden_room, extension, or other' }
+  }
+
+  // "Where" is a rough label, not an address record — blank means absent.
+  let roughLocationOrLabel: string | null = null
+  if (input.roughLocationOrLabel !== undefined && input.roughLocationOrLabel !== null) {
+    if (typeof input.roughLocationOrLabel !== 'string') {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'roughLocationOrLabel must be a string' }
+    }
+    const trimmed = input.roughLocationOrLabel.trim()
+    if (trimmed.length > MAX_JOB_LOCATION_LENGTH) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'roughLocationOrLabel must be 160 characters or fewer' }
+    }
+    roughLocationOrLabel = trimmed || null
+  }
+
+  let status = DEFAULT_CREATE_JOB_STATUS
+  if (input.status !== undefined && input.status !== null) {
+    if (typeof input.status !== 'string' || !CREATABLE_JOB_STATUSES.has(input.status)) {
+      throw { code: ErrorCode.INVALID_FIELD, message: 'status must be planning or started' }
+    }
+    status = input.status
   }
 
   const job = await prisma.job.create({
     data: {
       title: trimmedTitle,
       jobType: resolvedJobType,
+      status: status.toUpperCase() as never,
+      roughLocationOrLabel,
       ownerUserId: userId,
     },
     select: JOB_SELECT,

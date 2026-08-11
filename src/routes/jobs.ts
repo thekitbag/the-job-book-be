@@ -28,8 +28,13 @@ const jobsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/api/jobs', async (request, reply) => {
     try {
-      const body = request.body as Record<string, unknown> | null | undefined
-      const job = await createJob(request.userId, body?.title, body?.jobType)
+      const body = (request.body ?? {}) as Record<string, unknown>
+      const job = await createJob(request.userId, {
+        title: body.title,
+        jobType: body.jobType,
+        roughLocationOrLabel: body.roughLocationOrLabel,
+        status: body.status,
+      })
       return reply.code(201).send(job)
     } catch (err: unknown) {
       return handleServiceError(err, reply)
