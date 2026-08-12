@@ -604,11 +604,12 @@ describe('Source changes are reflected without duplicate records', () => {
       method: 'PATCH',
       url: `/api/jobs/${startedJobId}/memory-items/${missingPriceItemId}`,
       headers: jsonHeaders(ownerId),
-      // The stated total is sent explicitly: unlike direct-add, the material
-      // patch path does not derive a total from costQualifier 'total'.
-      payload: { memoryType: 'ordered_material', costAmount: '25', costCurrency: 'GBP', costQualifier: 'total', totalCostAmount: '25' },
+      // Exactly what the "Add price" correction sends: a stated total price and
+      // nothing else. The storage-only totalCostAmount is derived by the backend.
+      payload: { memoryType: 'ordered_material', costAmount: '25', costCurrency: 'GBP', costQualifier: 'total' },
     })
     expect(res.statusCode, JSON.stringify(res.json())).toBe(200)
+    expect(res.json().totalCostAmount).toBe('25')
 
     const body = await bookMoney()
     expect(body.toPayOnAccounts.missingPriceItems.map((i: { itemLabel: string }) => i.itemLabel)).toEqual(['Membrane'])
@@ -616,6 +617,67 @@ describe('Source changes are reflected without duplicate records', () => {
     expect(body.toPayOnAccounts.totalAmount).toBe('925')
     expect(body.bookHome.missingPriceCount).toBe(1)
     expect(body.bookHome.missingPriceLabel).toBe('1 cost needs a price')
+  })
+
+  it('moves an unsupplied cost priced at the source into Supplier needed', async () => {
+    const unpricedNoSupplier = (await bookMoney()).toPayOnAccounts.missingPriceItems
+      .find((i: { itemLabel: string }) => i.itemLabel === 'Membrane')
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/jobs/${startedJobId}/memory-items/${unpricedNoSupplier.sourceMemoryItemId}`,
+      headers: jsonHeaders(ownerId),
+      payload: { memoryType: 'ordered_material', costAmount: '60', costCurrency: 'GBP', costQualifier: 'total' },
+    })
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200)
+
+    const body = await bookMoney()
+    const needed = groupNamed(body, 'Supplier needed')!
+    expect(needed.totalAmount).toBe('100')
+    expect(needed.purchaseCount).toBe(2)
+    expect(body.toPayOnAccounts.totalAmount).toBe('960')
+    expect(body.toPayOnAccounts.missingPriceItems.map((i: { itemLabel: string }) => i.itemLabel)).toEqual(['Fixings'])
+  })
+
+  it('keeps an ambiguous corrected price in missing price, out of every total', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/jobs/${startedJobId}/memory-items/${missingPriceItemId}`,
+      headers: jsonHeaders(ownerId),
+      // £25 each, of an unknown quantity: not a safe line total.
+      payload: { memoryType: 'ordered_material', quantity: null, unit: null, costAmount: '25', costCurrency: 'GBP', costQualifier: 'each' },
+    })
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200)
+    expect(res.json().totalCostAmount).toBeNull()
+
+    const body = await bookMoney()
+    const fixings = body.toPayOnAccounts.missingPriceItems.find((i: { itemLabel: string }) => i.itemLabel === 'Fixings')
+    expect(fixings.reason).toBe('unsafe_total')
+    expect(groupNamed(body, 'Jewson')).toBeUndefined()
+    expect(body.toPayOnAccounts.totalAmount).toBe('900')
+    expect(body.bookHome.missingPriceCount).toBe(2)
+  })
+
+  it('keeps the job-level Budget and cross-job Money in step after a price correction', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/jobs/${startedJobId}/memory-items/${missingPriceItemId}`,
+      headers: jsonHeaders(ownerId),
+      payload: { memoryType: 'ordered_material', costAmount: '25', costCurrency: 'GBP', costQualifier: 'total' },
+    })
+    expect(res.statusCode, JSON.stringify(res.json())).toBe(200)
+
+    const budget = await app.inject({
+      method: 'GET', url: `/api/jobs/${startedJobId}/budget-summary`, headers: authHeaders(ownerId),
+    })
+    expect(budget.statusCode).toBe(200)
+    const rows = [...budget.json().uncategorized.rows, ...budget.json().categories.flatMap((c: { rows: unknown[] }) => c.rows)]
+    const fixings = rows.find((r: { memoryItemId: string }) => r.memoryItemId === missingPriceItemId)
+    // The same corrected cost, counted once, in both views.
+    expect(fixings).toMatchObject({ lineTotalAmount: '25', paymentState: 'not_paid' })
+    const body = await bookMoney()
+    const jewsonLine = groupNamed(body, 'Jewson')!.lines[0]
+    expect(jewsonLine.sourceMemoryItemId).toBe(missingPriceItemId)
+    expect(jewsonLine.amount).toBe('25')
   })
 
   it('drops a cost removed at the source', async () => {

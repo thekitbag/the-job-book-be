@@ -607,6 +607,64 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculati
     )
   })
 
+  // A stated total price ('total' qualifier) IS the line total — the same rule
+  // direct-add uses. Correcting a price at the source must not require the
+  // client to also send the storage-only totalCostAmount field.
+  it('derives totalCostAmount from a stated total price the client did not send', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }),
+    )
+
+    const res = await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', costAmount: '25', costCurrency: 'GBP', costQualifier: 'total' },
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ totalCostAmount: '25', costCurrency: 'GBP', unresolvedFlags: [] }),
+      }),
+    )
+  })
+
+  it('leaves no total when a corrected each-basis price is still ambiguous', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ quantity: null, unit: null, costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', costAmount: '25', costCurrency: 'GBP', costQualifier: 'each' },
+    })
+
+    // £25 each, of an unknown quantity, is not a safe line total.
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: null }) }),
+    )
+  })
+
+  it('preserves a legacy manual total when the patch does not touch the cost expression', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
+      makeExistingMemoryItem({ costAmount: '100', costCurrency: 'GBP', costQualifier: 'total', totalCostAmount: '250' }),
+    )
+
+    await app.inject({
+      method: 'PATCH', url: PATCH_URL,
+      headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
+      payload: { memoryType: 'ordered_material', materialName: 'OSB sheets' },
+    })
+
+    expect(prisma.memoryItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ totalCostAmount: '250' }) }),
+    )
+  })
+
   it('removes cost_uncertain when derived total now matches stored total', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
