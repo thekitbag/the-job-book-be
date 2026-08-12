@@ -92,6 +92,36 @@ describe('GET /api/jobs', () => {
     )
   })
 
+  it('orders deterministically: most recently updated first, id as tie-break', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([])
+
+    await app.inject({ method: 'GET', url: '/api/jobs', headers: { 'x-pilot-user-id': USER_ID } })
+
+    const args = vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(args.orderBy).toEqual([{ updatedAt: 'desc' }, { id: 'asc' }])
+  })
+
+  it('returns the fields Book Home and All Jobs group on', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeJob({ status: 'PLANNING', roughLocationOrLabel: 'Sandbanks Road' }),
+    ])
+
+    const res = await app.inject({ method: 'GET', url: '/api/jobs', headers: { 'x-pilot-user-id': USER_ID } })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json<Array<Record<string, unknown>>>()[0]).toMatchObject({
+      id: JOB_ID,
+      title: 'Poole garden room',
+      jobType: 'garden_room',
+      status: 'planning',
+      roughLocationOrLabel: 'Sandbanks Road',
+    })
+    const select = vi.mocked(prisma.job.findMany as ReturnType<typeof vi.fn>).mock.calls[0][0].select
+    expect(select).toMatchObject({ siteAddress: true, createdAt: true, updatedAt: true })
+  })
+
   it('excludes archived jobs from the list at the query level', async () => {
     const { prisma } = await import('../src/db/client.js')
     // Prisma applies the filter — mock returns only what would pass it
@@ -219,10 +249,9 @@ describe('GET /api/jobs/:jobId', () => {
 })
 
 describe('POST /api/jobs', () => {
-  it('creates a job with title and jobType, defaulting status to planning', async () => {
+  it('creates a job with title and jobType, defaulting status to started', async () => {
     const { prisma } = await import('../src/db/client.js')
-    // status is the DB default (PLANNING) — the service never sets it on create
-    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room', status: 'PLANNING' })
+    const created = makeJob({ title: 'Poole garden room', jobType: 'garden_room', status: 'STARTED' })
     vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(created)
 
     const res = await app.inject({
@@ -235,11 +264,106 @@ describe('POST /api/jobs', () => {
     expect(res.statusCode).toBe(201)
     const body = res.json<{ id: string; status: string; jobType: string }>()
     expect(body.id).toBe(JOB_ID)
-    expect(body.status).toBe('planning')
+    expect(body.status).toBe('started')
     expect(body.jobType).toBe('garden_room')
-    // create data must not force a status — the schema default owns it
+    // a new job is In progress unless Mike says it is only being planned
     const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
-    expect('status' in data).toBe(false)
+    expect(data.status).toBe('STARTED')
+  })
+
+  it('accepts an explicit planning status', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeJob({ status: 'PLANNING' })
+    )
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+      payload: { title: 'Quoted loft', status: 'planning' },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(res.json<{ status: string }>().status).toBe('planning')
+    const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
+    expect(data.status).toBe('PLANNING')
+  })
+
+  it('rejects finished and archived on create', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    for (const status of ['finished', 'archived']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/jobs',
+        headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+        payload: { title: 'Old job', status },
+      })
+      expect(res.statusCode, status).toBe(400)
+      expect(res.json<{ code: string }>().code).toBe('INVALID_FIELD')
+    }
+    expect(vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown status value', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+      payload: { title: 'Odd job', status: 'in_progress' },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json<{ code: string }>().code).toBe('INVALID_FIELD')
+  })
+
+  it('stores a trimmed optional where value', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeJob({ roughLocationOrLabel: 'Sandbanks Road' })
+    )
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+      payload: { title: 'New shed', roughLocationOrLabel: '  Sandbanks Road  ' },
+    })
+
+    expect(res.statusCode).toBe(201)
+    expect(res.json<{ roughLocationOrLabel: string }>().roughLocationOrLabel).toBe('Sandbanks Road')
+    const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
+    expect(data.roughLocationOrLabel).toBe('Sandbanks Road')
+  })
+
+  it('stores null when where is blank or omitted', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockResolvedValue(makeJob())
+
+    for (const payload of [{ title: 'A' }, { title: 'B', roughLocationOrLabel: '   ' }, { title: 'C', roughLocationOrLabel: null }]) {
+      vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mockClear()
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/jobs',
+        headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+        payload,
+      })
+      expect(res.statusCode).toBe(201)
+      const data = vi.mocked(prisma.job.create as ReturnType<typeof vi.fn>).mock.calls[0][0].data
+      expect(data.roughLocationOrLabel).toBeNull()
+    }
+  })
+
+  it('rejects an overlong where value with 400 INVALID_FIELD', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      headers: { 'x-pilot-user-id': USER_ID, 'content-type': 'application/json' },
+      payload: { title: 'New shed', roughLocationOrLabel: 'x'.repeat(161) },
+    })
+
+    expect(res.statusCode).toBe(400)
+    expect(res.json<{ code: string }>().code).toBe('INVALID_FIELD')
   })
 
   it('defaults missing jobType to other', async () => {

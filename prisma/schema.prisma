@@ -95,7 +95,10 @@ model Job {
   ownerUserId           String
   title                 String
   jobType               String
-  status                JobStatus @default(PLANNING)
+  // A job Mike adds is running unless he says it is only being planned.
+  // Kept in step with the API create default so seeds, scripts, and direct
+  // Prisma creates cannot drift from product intent.
+  status                JobStatus @default(STARTED)
   roughLocationOrLabel  String?
   siteAddress           String?
   notes                 String?
