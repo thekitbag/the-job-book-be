@@ -142,7 +142,8 @@ describe('GET /api/jobs/:jobId/details', () => {
       id: jobId,
       title: 'Poole garden room',
       jobType: 'garden_room',
-      status: 'planning',
+      // schema default: a job created without an explicit status is started
+      status: 'started',
       roughLocationOrLabel: null,
       siteAddress: null,
     })

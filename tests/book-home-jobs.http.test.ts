@@ -205,6 +205,22 @@ describe('POST /api/jobs — New Job', () => {
     expect(stored.customerTotalAmount).toBeNull()
   })
 
+  it('matches the schema default: a direct Prisma create (seed/script path) is started too', async () => {
+    const seeded = await prisma.job.create({
+      data: { ownerUserId: userAId, title: 'Seeded job', jobType: 'other' },
+    })
+    expect(seeded.status).toBe('STARTED')
+  })
+
+  it('does not reclassify existing jobs: a planning job stays planning', async () => {
+    const planning = await prisma.job.create({
+      data: { ownerUserId: userAId, title: 'Quoted loft', jobType: 'other', status: 'PLANNING' },
+    })
+    await createJob({ title: 'New garden room' })
+    const jobs = await listJobs()
+    expect(jobs.find((j) => j.id === planning.id)!.status).toBe('planning')
+  })
+
   it('is owner scoped: a job created by user B is invisible to user A', async () => {
     const res = await createJob({ title: 'User B loft' }, cookieB)
     expect(res.statusCode).toBe(201)
