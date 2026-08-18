@@ -31,6 +31,7 @@ import {
   listSupplierAccountPaymentHistory,
   type SupplierAccountPaymentHistoryRow,
 } from './supplier-payments.js'
+import { isSupplierAccountSettlementEnabled } from '../config/features.js'
 
 export type { BookJobStatus }
 
@@ -146,6 +147,19 @@ export interface BookMoneyResponse {
   // receipt stays reachable here long after its supplier's costs have left the
   // unpaid account list above.
   accountPaymentHistory: SupplierAccountPaymentHistoryRow[]
+  // What this deployment will actually accept, so the client can offer only the
+  // actions that exist. It reports the SAME backend gate the write routes
+  // enforce — it is a description of the API, never the thing that permits a
+  // write, which is always re-checked server-side.
+  capabilities: BookMoneyCapabilities
+}
+
+export interface BookMoneyCapabilities {
+  supplierAccountSettlement: boolean
+}
+
+function capabilities(): BookMoneyCapabilities {
+  return { supplierAccountSettlement: isSupplierAccountSettlementEnabled() }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -502,6 +516,7 @@ export async function getBookMoney(userId: string): Promise<BookMoneyResponse> {
     toPayOnAccounts,
     owedToMe,
     accountPaymentHistory,
+    capabilities: capabilities(),
   }
 }
 
@@ -527,5 +542,6 @@ function emptyResponse(
     toPayOnAccounts: null,
     owedToMe: null,
     accountPaymentHistory,
+    capabilities: capabilities(),
   }
 }

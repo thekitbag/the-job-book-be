@@ -335,7 +335,13 @@ describe('POST /api/book/money/supplier-payments', () => {
 
   it('rejects a stale selection with a different request id and writes nothing', async () => {
     await settleOk([timberId, insulationId])
-    const beforeEvents = await prisma.jobMoneyEvent.count({ where: { isDeleted: false } })
+    // Scoped to this file's own jobs: a count across the whole test database
+    // would be measuring every other suite's rows as well.
+    const activeEvents = () =>
+      prisma.jobMoneyEvent.count({
+        where: { isDeleted: false, jobId: { in: [startedJobId, planningJobId, finishedJobId] } },
+      })
+    const beforeEvents = await activeEvents()
 
     // Same costs, new submit: they are already paid.
     const duplicate = await settle([timberId, insulationId])
@@ -348,7 +354,7 @@ describe('POST /api/book/money/supplier-payments', () => {
     expect(partial.statusCode).toBe(409)
 
     expect(await prisma.supplierAccountPayment.count({ where: { ownerUserId: ownerId } })).toBe(1)
-    expect(await prisma.jobMoneyEvent.count({ where: { isDeleted: false } })).toBe(beforeEvents)
+    expect(await activeEvents()).toBe(beforeEvents)
     // The still-payable cost stayed unpaid and settleable.
     const retry = await settle([plasterboardId])
     expect(retry.statusCode).toBe(201)
@@ -777,5 +783,34 @@ describe('SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED', () => {
     process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = value
     const res = await settle([timberId])
     expect(res.statusCode).toBe(201)
+  })
+
+  // The client asks the API what it will accept rather than guessing from its
+  // own flag. This only describes the gate — it never replaces it.
+  it('reports the same gate through capabilities on GET /api/book/money', async () => {
+    expect((await bookMoney()).capabilities).toEqual({ supplierAccountSettlement: true })
+
+    delete process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED
+    expect((await bookMoney()).capabilities).toEqual({ supplierAccountSettlement: false })
+
+    process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = 'false'
+    expect((await bookMoney()).capabilities).toEqual({ supplierAccountSettlement: false })
+
+    // Capability and enforcement cannot disagree: reported off, write refused.
+    expect((await settle([timberId])).statusCode).toBe(403)
+
+    process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = 'true'
+    expect((await bookMoney()).capabilities).toEqual({ supplierAccountSettlement: true })
+    expect((await settle([timberId])).statusCode).toBe(201)
+  })
+
+  it('reports capabilities for a builder with no jobs at all', async () => {
+    const lonely = await prisma.user.create({
+      data: { email: `${EMAIL_PREFIX}lonely@test.local`, name: 'Lonely', role: 'PILOT' },
+    })
+    expect((await bookMoney(lonely.id)).capabilities).toEqual({ supplierAccountSettlement: true })
+
+    delete process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED
+    expect((await bookMoney(lonely.id)).capabilities).toEqual({ supplierAccountSettlement: false })
   })
 })
