@@ -32,7 +32,23 @@ const SUPPLIER_ACCOUNT_MEMORY_TYPES = ['ORDERED_MATERIAL'] as const
 
 const SUPPLIER_NEEDED_LABEL = 'Supplier needed'
 
-const gbp = (amount: string) => `£${amount}`
+// Cross-job labels are prose read at a glance next to a frontend-formatted
+// figure, so they carry thousands separators ("can't be in the £6,088" — the
+// spec's own example). Job-level Money/Budget keep their plain `£${amount}`
+// style; the difference is display only. Amount FIELDS stay raw decimal
+// strings everywhere so the client formats its own figures.
+const gbpOptions = { style: 'currency', currency: 'GBP' } as const
+const gbpWhole = new Intl.NumberFormat('en-GB', { ...gbpOptions, minimumFractionDigits: 0, maximumFractionDigits: 0 })
+// Pence show in full or not at all — "£4,870.50", never "£4,870.5".
+const gbpPence = new Intl.NumberFormat('en-GB', { ...gbpOptions, minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function gbp(amount: string): string {
+  // Never invent a figure: anything not a plain decimal is shown as stored.
+  if (!STRICT_DECIMAL_RE.test(amount)) return `£${amount}`
+  const n = Number(amount)
+  return Number.isInteger(n) ? gbpWhole.format(n) : gbpPence.format(n)
+}
+
 const round2 = (n: number) => String(Math.round(n * 100) / 100)
 
 const JOB_STATUS_LABELS: Record<string, string> = {
@@ -218,6 +234,22 @@ function missingPriceReasonLabel(reason: MissingPriceReason, total: string | nul
 
 const plural = (count: number, singular: string, pluralForm: string) =>
   count === 1 ? singular : pluralForm
+
+// The two facts the total itself cannot carry: how many costs make it up, and
+// how many accounts they sit on. Deliberately does NOT repeat the total, which
+// is already the largest thing on the screen (and `totalLabel`). Parts are
+// joined with ' · ' so a client can split and stack them.
+// "priced costs", not the design's "recorded costs": unpriced recorded costs
+// exist and are excluded from this count, so the narrower word is the true one.
+function accountsSummaryLabel(pricedCostCount: number, namedSupplierCount: number, unnamedGroupCount: number): string {
+  const costs = `${pricedCostCount} priced ${plural(pricedCostCount, 'cost', 'costs')}`
+  const accounts = namedSupplierCount > 0
+    ? `${namedSupplierCount} ${plural(namedSupplierCount, 'account', 'accounts')}${unnamedGroupCount > 0 ? ', 1 unnamed' : ''}`
+    : unnamedGroupCount > 0
+      ? 'no supplier named yet'
+      : null
+  return accounts === null ? costs : `${costs} · ${accounts}`
+}
 
 // ── Read model ────────────────────────────────────────────────────────────────
 
@@ -419,7 +451,7 @@ export async function getBookMoney(userId: string): Promise<BookMoneyResponse> {
         unnamedSupplierGroupCount,
         summaryLabel: toPayTotal === null
           ? `${missingPrice.length} ${plural(missingPrice.length, 'cost needs', 'costs need')} a price`
-          : `${gbp(toPayTotal)} across ${pricedCostCount} priced ${plural(pricedCostCount, 'cost', 'costs')}`,
+          : accountsSummaryLabel(pricedCostCount, namedSupplierCount, unnamedSupplierGroupCount),
         supplierGroups: groups,
         missingPriceItems: missingPrice,
       }

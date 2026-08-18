@@ -479,10 +479,10 @@ describe('Owed to me', () => {
       jobStatusLabel: 'In progress',
       roughLocationOrLabel: 'Wimborne',
       owedAmount: '2500',
-      owedLabel: '£2500 owed',
+      owedLabel: '£2,500 owed',
       customerTotalAmount: '4000',
       moneyInAmount: '1500',
-      moneyInLabel: '£1500 received',
+      moneyInLabel: '£1,500 received',
       contextLabel: null,
     })
     // A finished job stays visible while money is still owed.
@@ -523,7 +523,7 @@ describe('Book Home summary', () => {
       toPayOnAccountsLabel: '£900 to pay on accounts',
       owedToMeAmount: body.owedToMe.totalAmount,
       owedToMeCurrency: 'GBP',
-      owedToMeLabel: '£4000 owed to me',
+      owedToMeLabel: '£4,000 owed to me',
       missingPriceCount: body.toPayOnAccounts.missingPriceItems.length,
       missingPriceLabel: '2 costs need a price',
     })
@@ -550,6 +550,45 @@ describe('Book Home summary', () => {
     expect(body.toPayOnAccounts.totalAmount).toBe('900')
     expect(body.bookHome.showMoneyRow).toBe(true)
     expect(body.bookHome.owedToMeAmount).toBeNull()
+  })
+})
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+describe('Money labels', () => {
+  it('formats figures with thousands separators, and pence in full or not at all', async () => {
+    await cleanupJobsOf([ownerId, otherOwnerId])
+    const jobId = await job(ownerId, 'Big job', 'STARTED', { customerTotalAmount: '18500', customerTotalCurrency: 'GBP' })
+    await addItem(jobId, ownerId, purchase({ materialName: 'Timber', supplierName: 'Sydenhams', amount: '1240.50' }))
+    await addItem(jobId, ownerId, purchase({ materialName: 'OSB', supplierName: 'Sydenhams', amount: '4870' }))
+    await addItem(jobId, ownerId, purchase({ materialName: 'Membrane', supplierName: 'Sydenhams', amount: null }))
+
+    const body = await bookMoney()
+    expect(body.toPayOnAccounts.totalLabel).toBe('£6,110.50')
+    expect(groupNamed(body, 'Sydenhams')!.totalLabel).toBe('£6,110.50')
+    expect(groupNamed(body, 'Sydenhams')!.lines.map((l: { amountLabel: string }) => l.amountLabel))
+      .toEqual(['£1,240.50', '£4,870'])
+    expect(body.toPayOnAccounts.missingPriceItems[0].reasonLabel)
+      .toBe("cost has no price yet — can't be in the £6,110.50")
+    expect(body.bookHome.toPayOnAccountsLabel).toBe('£6,110.50 to pay on accounts')
+    expect(body.bookHome.owedToMeLabel).toBe('£18,500 owed to me')
+    expect(body.owedToMe.jobs[0].owedLabel).toBe('£18,500 owed')
+    // Amount fields stay raw decimal strings for the client to format itself.
+    expect(body.toPayOnAccounts.totalAmount).toBe('6110.5')
+  })
+
+  it('summarises priced-cost and account counts without repeating the total', async () => {
+    const body = await bookMoney()
+    expect(body.toPayOnAccounts.summaryLabel).toBe('6 priced costs · 3 accounts, 1 unnamed')
+  })
+
+  it('names no accounts when every priced cost still needs a supplier', async () => {
+    await cleanupJobsOf([ownerId, otherOwnerId])
+    const jobId = await job(ownerId, 'Unsupplied job', 'STARTED')
+    await addItem(jobId, ownerId, purchase({ materialName: 'Sand', supplierName: null, amount: '40' }))
+
+    const body = await bookMoney()
+    expect(body.toPayOnAccounts.summaryLabel).toBe('1 priced cost · no supplier named yet')
   })
 })
 
