@@ -25,6 +25,7 @@ import receiptsRoutes from './routes/receipts.js'
 import supportRoutes from './routes/support.js'
 import paymentsRoutes from './routes/payments.js'
 import moneyRoutes from './routes/money.js'
+import bookMoneyRoutes from './routes/book-money.js'
 import labourPeopleRoutes from './routes/labour-people.js'
 import jobContactsRoutes from './routes/job-contacts.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
@@ -88,6 +89,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(supportRoutes, { storage })
   fastify.register(paymentsRoutes)
   fastify.register(moneyRoutes)
+  fastify.register(bookMoneyRoutes)
   fastify.register(labourPeopleRoutes)
   fastify.register(jobContactsRoutes)
 

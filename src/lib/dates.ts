@@ -73,3 +73,17 @@ export function resolveDraftHappenedAt(
 
   return null
 }
+
+// Short UK display date for a stored timestamp: "13 Jun 2026". Used where a
+// remembered source date is shown next to a fact, so the day reads the same as
+// the UK local day it was stored for.
+const ukShortDateFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: UK_TIME_ZONE,
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+})
+
+export function ukShortDateLabel(instant: Date): string {
+  return ukShortDateFormat.format(instant)
+}

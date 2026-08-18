@@ -188,13 +188,34 @@ export async function patchMemoryItem(
   const derivedLabourTotal = effCostQualifier === 'total' && effCostAmount != null && STRICT_DECIMAL_RE.test(effCostAmount)
     ? effCostAmount
     : deriveSafeLabourTotal(effLabourHours, effCostAmount, effCostQualifier)
+  // A material price correction derives its total exactly as direct-add does:
+  // a stated total ('total' qualifier) IS the line total, and an 'each' basis is
+  // derived by `derived` above. Correcting a price must not require the client to
+  // also send the storage-only totalCostAmount — without this, a corrected cost
+  // kept a null/stale total and stayed invisible to Budget and cross-job Money.
+  // Guarded on the cost expression actually changing so an unrelated patch still
+  // preserves a legacy/manual total that has no derivable basis.
+  const materialCostExpressionChanged = !finalIsLabour && (
+    effCostAmount !== existing.costAmount ||
+    effCostCurrency !== existing.costCurrency ||
+    effCostQualifier !== existing.costQualifier ||
+    effQty !== existing.quantity ||
+    effUnit !== existing.unit
+  )
+  const statedMaterialTotal =
+    materialCostExpressionChanged &&
+    effCostQualifier === 'total' &&
+    effCostAmount != null &&
+    STRICT_DECIMAL_RE.test(effCostAmount)
+      ? effCostAmount
+      : null
   const finalTotalCostAmount = clearsLabourRate
     ? null
     : explicitTotalInPatch
     ? (patch.totalCostAmount ?? null)
     : finalIsLabour && labourCostExpressionChanged
       ? derivedLabourTotal
-      : (derived !== null ? derived : existing.totalCostAmount)
+      : (statedMaterialTotal ?? derived ?? existing.totalCostAmount)
 
   // Recompute cost_uncertain based on final effective data
   const conflict = hasCostConflict(effQty, effCostAmount, effCostQualifier, finalTotalCostAmount)
