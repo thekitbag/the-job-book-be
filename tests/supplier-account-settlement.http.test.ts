@@ -5,7 +5,8 @@
 // partial write, no duplicate payment, no double-counted job Money, no Budget
 // movement, and an Undo that puts every covered cost back — plus the eligibility
 // boundary that stops a payment being recorded against something the memory
-// cannot honestly tie to a supplier account. Real DB, HTTP level.
+// cannot honestly tie to a supplier account, and the backend feature gate that
+// holds regardless of what the frontend shows. Real DB, HTTP level.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
@@ -228,6 +229,9 @@ async function seedBook() {
 }
 
 beforeAll(async () => {
+  // Settlement writes are gated off by default; the behaviour tests below run
+  // with the feature on, and the gate itself is covered separately.
+  process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = 'true'
   app = buildApp({
     storage: new FakeAudioStorage(),
     transcription: new FakeTranscriptionProvider(),
@@ -240,12 +244,14 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  delete process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED
   await cleanup()
   await app.close()
 })
 
 beforeEach(async () => {
   delete process.env.PILOT_USER_ID
+  process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = 'true'
   await cleanupJobsOf([ownerId, otherOwnerId])
   await seedBook()
 })
@@ -709,5 +715,67 @@ describe('a source cost covered by an active supplier payment', () => {
       headers: authHeaders(ownerId),
     })
     expect(removed.statusCode).toBe(204)
+  })
+})
+
+// ── Backend feature gate ──────────────────────────────────────────────────────
+
+// The backend owns whether a settlement can be recorded. A frontend flag can
+// only decide whether the UI is offered, so the API has to refuse on its own.
+describe('SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED', () => {
+  it('refuses every settlement write when the gate is off, and still serves reads', async () => {
+    const receipt = await settleOk([timberId, insulationId])
+    delete process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED
+
+    const create = await settle([plasterboardId])
+    expect(create.statusCode).toBe(403)
+    expect(create.json().code).toBe('SUPPLIER_SETTLEMENT_DISABLED')
+
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `${PAYMENTS_URL}/${receipt.id}`,
+      headers: jsonHeaders(ownerId),
+      payload: { paidAt: '2026-08-01' },
+    })
+    expect(patched.statusCode).toBe(403)
+
+    const undone = await app.inject({
+      method: 'DELETE',
+      url: `${PAYMENTS_URL}/${receipt.id}`,
+      headers: authHeaders(ownerId),
+    })
+    expect(undone.statusCode).toBe(403)
+
+    // Nothing was recorded or changed by the refused writes.
+    expect(await prisma.supplierAccountPayment.count({ where: { ownerUserId: ownerId, isDeleted: false } })).toBe(1)
+    expect(await prisma.jobMoneyEvent.count({ where: { sourceMemoryItemId: plasterboardId, isDeleted: false } })).toBe(0)
+
+    // A payment recorded while the feature was on stays fully readable.
+    const read = await app.inject({ method: 'GET', url: `${PAYMENTS_URL}/${receipt.id}`, headers: authHeaders(ownerId) })
+    expect(read.statusCode).toBe(200)
+    expect(read.json()).toEqual(receipt)
+    const book = await bookMoney()
+    expect(book.accountPaymentHistory[0].id).toBe(receipt.id)
+    const started = await jobMoney(startedJobId)
+    expect(started.rows.filter((r: { kind: string }) => r.kind === 'supplier_account_payment')).toHaveLength(1)
+  })
+
+  it.each([
+    ['unset', undefined],
+    ['false', 'false'],
+    ['empty', ''],
+    ['misspelled', 'enabled'],
+    ['0', '0'],
+  ])('fails closed when the flag is %s', async (_label, value) => {
+    if (value === undefined) delete process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED
+    else process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = value
+    const res = await settle([timberId])
+    expect(res.statusCode).toBe(403)
+  })
+
+  it.each([['true'], ['1'], ['TRUE'], ['on'], ['yes']])('opens the write path for %s', async (value) => {
+    process.env.SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED = value
+    const res = await settle([timberId])
+    expect(res.statusCode).toBe(201)
   })
 })

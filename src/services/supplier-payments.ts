@@ -18,11 +18,16 @@
 // mark-paid impossible) keep working untouched. Job Money then GROUPS those
 // child markers into one visible allocation row per job, so an aggregate payment
 // is never double-counted on a job. Undo is aggregate-only.
+//
+// Writes here are gated by SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED (default off).
+// The backend owns that decision: a frontend flag can hide the UI, but only this
+// gate can stop a payment being recorded.
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import { classifySpend } from '../lib/spend-classification.js'
 import { strictParsePositive } from '../lib/cost-utils.js'
 import { ukLocalNoon, ukLocalDayString, ukShortDateLabel } from '../lib/dates.js'
+import { isSupplierAccountSettlementEnabled } from '../config/features.js'
 import {
   gbp,
   round2,
@@ -55,6 +60,16 @@ function staleSelection(reason: StaleReason): never {
     code: ErrorCode.SUPPLIER_PAYMENT_STALE_SELECTION,
     message: 'This account changed. Review the current costs and try again',
     reason,
+  }
+}
+
+// Every settlement write passes through here first. The gate lives in the
+// service, not the route, so no other caller can reach a write around it.
+function assertSettlementEnabled(): void {
+  if (isSupplierAccountSettlementEnabled()) return
+  throw {
+    code: ErrorCode.SUPPLIER_SETTLEMENT_DISABLED,
+    message: 'Supplier account settlement is not enabled',
   }
 }
 
@@ -299,6 +314,7 @@ export async function createSupplierAccountPayment(
   userId: string,
   input: CreateSupplierAccountPaymentInput,
 ): Promise<{ receipt: SupplierAccountPaymentReceipt; created: boolean }> {
+  assertSettlementEnabled()
   const clientRequestId = requiredString(input.clientRequestId, 'clientRequestId')
   const supplierName = requiredString(input.supplierName, 'supplierName')
   const supplierGroupId = requiredString(input.supplierGroupId, 'supplierGroupId')
@@ -433,6 +449,7 @@ export async function patchSupplierAccountPaymentDate(
   paymentId: string,
   input: { paidAt?: unknown },
 ) {
+  assertSettlementEnabled()
   const payment = await loadOwnedPayment(userId, paymentId)
   const paidAt = parsePaidAt(input.paidAt, { required: true })
 
@@ -453,6 +470,7 @@ export async function patchSupplierAccountPaymentDate(
 // Aggregate only: every covered cost goes back to not paid together. Budget is
 // untouched, because it never saw the payment in the first place.
 export async function undoSupplierAccountPayment(userId: string, paymentId: string) {
+  assertSettlementEnabled()
   const payment = await loadOwnedPayment(userId, paymentId)
   const deletedAt = new Date()
 
