@@ -16,6 +16,7 @@ import { ukLocalNoon } from '../lib/dates.js'
 import { refundMoneyEventData, costPaidMoneyEventData } from './money.js'
 import { requireJobLabourPerson } from './labour-people.js'
 import { classifySpend } from '../lib/spend-classification.js'
+import { activeSupplierPaymentOwning, supplierPaymentOwnsCost } from './supplier-payments.js'
 
 async function verifyJobOwnership(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
@@ -238,6 +239,29 @@ export async function patchMemoryItem(
     if (paid) throw { code: ErrorCode.INVALID_FIELD, message: 'Undo paid before changing a labour cost amount' }
   }
 
+  // A cost covered by an active aggregate supplier payment is fixed at what the
+  // receipt says the payment paid. Wording and non-financial context stay
+  // editable; anything that would move the figure, the supplier, or the type is
+  // refused so the receipt can never describe a payment that did not happen.
+  const financiallyMaterialChange =
+    finalMemoryType !== existing.memoryType ||
+    ('supplierName' in patch && (patch.supplierName ?? null) !== existing.supplierName) ||
+    effCostAmount !== existing.costAmount ||
+    effCostCurrency !== existing.costCurrency ||
+    effCostQualifier !== existing.costQualifier ||
+    effQty !== existing.quantity ||
+    effUnit !== existing.unit ||
+    finalTotalCostAmount !== existing.totalCostAmount
+  if (financiallyMaterialChange) {
+    const owningPaymentId = await activeSupplierPaymentOwning(memoryItemId)
+    if (owningPaymentId) {
+      supplierPaymentOwnsCost(
+        owningPaymentId,
+        'Undo the supplier payment, correct this cost, then record the payment again',
+      )
+    }
+  }
+
   const updated = await prisma.memoryItem.update({
     where: { id: memoryItemId },
     data: {
@@ -286,6 +310,16 @@ export async function removeMemoryItem(jobId: string, memoryItemId: string, user
     where: { id: memoryItemId, jobId, isRemoved: false },
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  // Removing a cost an aggregate supplier payment covers would orphan that
+  // receipt, so it is refused rather than silently shrinking a recorded payment.
+  const owningPaymentId = await activeSupplierPaymentOwning(memoryItemId)
+  if (owningPaymentId) {
+    supplierPaymentOwnsCost(
+      owningPaymentId,
+      'Undo the supplier payment before removing this cost',
+    )
+  }
 
   // Removing a Budget cost source must not leave an active Money out pointing at a
   // gone item. Soft-delete any active money events linked to this item (COST_PAID

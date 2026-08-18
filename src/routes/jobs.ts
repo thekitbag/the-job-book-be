@@ -85,6 +85,12 @@ const STATUS_MAP: Record<string, number> = {
   [ErrorCode.LABOUR_PERSON_NOT_FOUND]: 404,
   [ErrorCode.LABOUR_PERSON_ALREADY_EXISTS]: 400,
   [ErrorCode.JOB_CONTACT_NOT_FOUND]: 404,
+  [ErrorCode.SUPPLIER_PAYMENT_NOT_FOUND]: 404,
+  // A settlement is written against a selection Mike made moments ago; if any
+  // covered cost changed underneath it, nothing is written and the client is
+  // told to re-read the account (409, not 400 — the request was well-formed).
+  [ErrorCode.SUPPLIER_PAYMENT_STALE_SELECTION]: 409,
+  [ErrorCode.SUPPLIER_PAYMENT_OWNS_COST]: 400,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {

@@ -12,54 +12,33 @@
 //
 // Deliberately absent (Slice 3, not this slice): selection, mark paid,
 // settlement, partial payment, supplier rename/merge, bulk correction.
-import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { classifySpend } from '../lib/spend-classification.js'
 import { strictParsePositive, STRICT_DECIMAL_RE } from '../lib/cost-utils.js'
 import { ukShortDateLabel } from '../lib/dates.js'
+import {
+  gbp,
+  round2,
+  computeGroupId,
+  normalizeSupplier,
+  quantityLabel,
+  JOB_STATUS_LABELS,
+  SUPPLIER_ACCOUNT_MEMORY_TYPES,
+  SUPPLIER_NEEDED_LABEL,
+  type BookJobStatus,
+} from '../lib/supplier-account.js'
+import {
+  listSupplierAccountPaymentHistory,
+  type SupplierAccountPaymentHistoryRow,
+} from './supplier-payments.js'
+
+export type { BookJobStatus }
 
 // Jobs whose money still counts across the book. Archived is the only status
 // hidden: a finished job keeps appearing while money is outstanding.
 const VISIBLE_JOB_STATUSES = ['PLANNING', 'STARTED', 'FINISHED'] as const
 
-// Supplier-account eligibility, conservative by design (see the spec's trust
-// boundary). Only remembered bought/ordered material is treated as a purchase
-// on a supplier account. BUDGET_COST is deliberately NOT included: the model
-// has no discriminator proving a generic budget cost is a supplier/merchant
-// purchase rather than plant hire, a subcontractor or another job cost, and
-// guessing would inflate what Mike thinks he owes a merchant.
-const SUPPLIER_ACCOUNT_MEMORY_TYPES = ['ORDERED_MATERIAL'] as const
-
-const SUPPLIER_NEEDED_LABEL = 'Supplier needed'
-
-// Cross-job labels are prose read at a glance next to a frontend-formatted
-// figure, so they carry thousands separators ("can't be in the £6,088" — the
-// spec's own example). Job-level Money/Budget keep their plain `£${amount}`
-// style; the difference is display only. Amount FIELDS stay raw decimal
-// strings everywhere so the client formats its own figures.
-const gbpOptions = { style: 'currency', currency: 'GBP' } as const
-const gbpWhole = new Intl.NumberFormat('en-GB', { ...gbpOptions, minimumFractionDigits: 0, maximumFractionDigits: 0 })
-// Pence show in full or not at all — "£4,870.50", never "£4,870.5".
-const gbpPence = new Intl.NumberFormat('en-GB', { ...gbpOptions, minimumFractionDigits: 2, maximumFractionDigits: 2 })
-
-function gbp(amount: string): string {
-  // Never invent a figure: anything not a plain decimal is shown as stored.
-  if (!STRICT_DECIMAL_RE.test(amount)) return `£${amount}`
-  const n = Number(amount)
-  return Number.isInteger(n) ? gbpWhole.format(n) : gbpPence.format(n)
-}
-
-const round2 = (n: number) => String(Math.round(n * 100) / 100)
-
-const JOB_STATUS_LABELS: Record<string, string> = {
-  planning: 'Planning',
-  started: 'In progress',
-  finished: 'Finished',
-}
-
 // ── Response types ────────────────────────────────────────────────────────────
-
-export type BookJobStatus = 'planning' | 'started' | 'finished'
 
 export interface SupplierAccountLine {
   id: string
@@ -163,32 +142,13 @@ export interface BookMoneyResponse {
     jobCount: number
     jobs: OwedToMeJob[]
   } | null
+  // Real aggregate supplier payments Mike recorded, newest first. Durable: a
+  // receipt stays reachable here long after its supplier's costs have left the
+  // unpaid account list above.
+  accountPaymentHistory: SupplierAccountPaymentHistoryRow[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// Opaque but deterministic group id. Derived from the owner + the exact stored
-// supplier key so the same supplier group keeps the same id between reads.
-// Never a supplier database id — there is no supplier record in this model.
-function computeGroupId(userId: string, supplierKey: string): string {
-  const h = createHash('sha256').update(`${userId}:supplier:${supplierKey}`).digest('hex')
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`
-}
-
-// Supplier identity is the trusted stored field, trimmed for display only.
-// Similar names are never merged: `Sydenhams`, `Sydenham's` and `Sydenhams Ltd`
-// stay three groups until the model gains a real canonical supplier identity.
-function normalizeSupplier(supplierName: string | null): string | null {
-  const trimmed = supplierName?.trim()
-  return trimmed ? trimmed : null
-}
-
-function quantityLabel(quantity: string | null, unit: string | null): string | null {
-  const q = quantity?.trim()
-  if (!q) return null
-  const u = unit?.trim()
-  return u ? `${q} ${u}` : q
-}
 
 // A trusted £0 cost is deliberately no-cost, not an unknown price: it is
 // neither payable nor a missing-price correction, so it leaves this view
@@ -294,8 +254,12 @@ export async function getBookMoney(userId: string): Promise<BookMoneyResponse> {
     },
   })) as JobRow[]
 
+  // History is owner-scoped, not job-scoped: it survives even a book whose jobs
+  // have all been archived, so a recorded payment never becomes unreachable.
+  const accountPaymentHistory = await listSupplierAccountPaymentHistory(userId)
+
   const jobIds = jobs.map((j) => j.id)
-  if (jobIds.length === 0) return emptyResponse(generatedAt)
+  if (jobIds.length === 0) return emptyResponse(generatedAt, accountPaymentHistory)
 
   const [items, paidEvents, payments, categories] = await Promise.all([
     prisma.memoryItem.findMany({
@@ -522,7 +486,8 @@ export async function getBookMoney(userId: string): Promise<BookMoneyResponse> {
   return {
     generatedAt,
     bookHome: {
-      showMoneyRow: toPayTotal !== null || owedTotal !== null || missingPriceCount > 0,
+      showMoneyRow:
+        toPayTotal !== null || owedTotal !== null || missingPriceCount > 0 || accountPaymentHistory.length > 0,
       toPayOnAccountsAmount: toPayTotal,
       toPayOnAccountsCurrency: toPayTotal === null ? null : 'GBP',
       toPayOnAccountsLabel: toPayTotal === null ? null : `${gbp(toPayTotal)} to pay on accounts`,
@@ -536,14 +501,20 @@ export async function getBookMoney(userId: string): Promise<BookMoneyResponse> {
     },
     toPayOnAccounts,
     owedToMe,
+    accountPaymentHistory,
   }
 }
 
-function emptyResponse(generatedAt: string): BookMoneyResponse {
+function emptyResponse(
+  generatedAt: string,
+  accountPaymentHistory: SupplierAccountPaymentHistoryRow[],
+): BookMoneyResponse {
   return {
     generatedAt,
     bookHome: {
-      showMoneyRow: false,
+      // A bare Money row when history is the only Money content — never a fake
+      // £0 balance, which would read as "nothing owed" rather than "nothing new".
+      showMoneyRow: accountPaymentHistory.length > 0,
       toPayOnAccountsAmount: null,
       toPayOnAccountsCurrency: null,
       toPayOnAccountsLabel: null,
@@ -555,5 +526,6 @@ function emptyResponse(generatedAt: string): BookMoneyResponse {
     },
     toPayOnAccounts: null,
     owedToMe: null,
+    accountPaymentHistory,
   }
 }

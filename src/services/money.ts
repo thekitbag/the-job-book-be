@@ -11,6 +11,7 @@ import { ErrorCode } from '../types/errors.js'
 import { strictParsePositive } from '../lib/cost-utils.js'
 import { classifySpend } from '../lib/spend-classification.js'
 import { ukLocalNoon } from '../lib/dates.js'
+import { supplierPaymentOwnsCost } from './supplier-payments.js'
 
 export const MAX_MONEY_NOTE_LENGTH = 120
 export const MAX_MONEY_REFERENCE_LENGTH = 80
@@ -57,7 +58,11 @@ export interface MoneyRow {
   id: string
   jobId: string
   direction: 'in' | 'out'
-  kind: 'customer_payment' | 'refund' | 'cost_paid'
+  // 'supplier_account_payment' is this job's share of ONE aggregate payment Mike
+  // made to a named supplier covering costs across several jobs. It is a single
+  // grouped row: its child COST_PAID markers never also appear on their own, so
+  // the job's Money out counts the allocation exactly once.
+  kind: 'customer_payment' | 'refund' | 'cost_paid' | 'supplier_account_payment'
   amount: string
   currency: 'GBP'
   amountLabel: string
@@ -69,6 +74,13 @@ export interface MoneyRow {
   sourceMemoryType: string | null
   sourceBudgetCategoryId: string | null
   sourceBudgetCategoryName: string | null
+  // Set on a 'supplier_account_payment' row only: the aggregate receipt this
+  // allocation belongs to, and the covered source costs on this job. Undo and
+  // date changes go through the receipt, never through this row.
+  supplierAccountPaymentId: string | null
+  supplierName: string | null
+  sourceMemoryItemIds: string[] | null
+  allocationSourceLabels: string[] | null
   editable: boolean
   removable: boolean
   createdAt: string
@@ -126,6 +138,10 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
     sourceMemoryType: null,
     sourceBudgetCategoryId: null,
     sourceBudgetCategoryName: null,
+    supplierAccountPaymentId: null,
+    supplierName: null,
+    sourceMemoryItemIds: null,
+    allocationSourceLabels: null,
     editable: true,
     removable: true,
     createdAt: p.createdAt.toISOString(),
@@ -135,7 +151,13 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
     _createdAt: p.createdAt,
   }) as MoneyRow & { _occurredAt: Date; _createdAt: Date })
 
-  const eventRows: MoneyRow[] = events.map((e) => {
+  // An aggregate supplier payment's child markers are grouped into one visible
+  // allocation row per job below; they must not also appear individually, or the
+  // job would read as having paid the same costs twice.
+  const linkedEvents = events.filter((e) => !!e.supplierAccountPaymentId)
+  const plainEvents = events.filter((e) => !e.supplierAccountPaymentId)
+
+  const eventRows: MoneyRow[] = plainEvents.map((e) => {
     const direction = e.direction === 'IN' ? 'in' : 'out'
     const src = e.sourceMemoryItemId ? sourceById.get(e.sourceMemoryItemId) : undefined
     const category = src?.budgetCategoryId ? categoryById.get(src.budgetCategoryId) : undefined
@@ -155,6 +177,10 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
       sourceMemoryType: src ? src.memoryType.toLowerCase() : null,
       sourceBudgetCategoryId: src?.budgetCategoryId ?? null,
       sourceBudgetCategoryName: category?.name ?? null,
+      supplierAccountPaymentId: null,
+      supplierName: null,
+      sourceMemoryItemIds: null,
+      allocationSourceLabels: null,
       // Money events are not free-form editable in v1 (they mirror a source);
       // they can be removed as a correction.
       editable: false,
@@ -166,7 +192,60 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
     } as MoneyRow & { _occurredAt: Date; _createdAt: Date }
   })
 
-  const rowsWithKeys = [...paymentRows, ...eventRows] as Array<MoneyRow & { _occurredAt: Date; _createdAt: Date }>
+  // One row per aggregate payment touching this job, worth this job's share.
+  const allocationRows: MoneyRow[] = []
+  if (linkedEvents.length) {
+    const paymentIds = [...new Set(linkedEvents.map((e) => e.supplierAccountPaymentId as string))]
+    const supplierPayments = typeof prisma.supplierAccountPayment?.findMany === 'function'
+      ? await prisma.supplierAccountPayment.findMany({
+          where: { id: { in: paymentIds } },
+          select: { id: true, supplierName: true, paidAt: true },
+        })
+      : []
+    const supplierPaymentById = new Map(supplierPayments.map((p) => [p.id, p]))
+
+    for (const paymentId of paymentIds) {
+      const children = linkedEvents.filter((e) => e.supplierAccountPaymentId === paymentId)
+      const payment = supplierPaymentById.get(paymentId)
+      const amount = round2(children.reduce((sum, c) => sum + (strictParsePositive(c.amount) ?? 0), 0))
+      const childSourceIds = children
+        .map((c) => c.sourceMemoryItemId)
+        .filter((id): id is string => id !== null)
+      allocationRows.push({
+        // The receipt's id: this row is a view of the aggregate payment, and the
+        // client acts on it (open, undo, change date) through the receipt routes.
+        id: paymentId,
+        jobId: job.id,
+        direction: 'out',
+        kind: 'supplier_account_payment',
+        amount,
+        currency: 'GBP',
+        amountLabel: amountLabel('out', amount),
+        occurredAt: (payment?.paidAt ?? children[0].occurredAt).toISOString(),
+        note: null,
+        reference: null,
+        sourceMemoryItemId: null,
+        sourceItemLabel: null,
+        sourceMemoryType: null,
+        sourceBudgetCategoryId: null,
+        sourceBudgetCategoryName: null,
+        supplierAccountPaymentId: paymentId,
+        supplierName: payment?.supplierName ?? null,
+        sourceMemoryItemIds: childSourceIds,
+        allocationSourceLabels: childSourceIds.map((id) => sourceLabel(sourceById.get(id)) ?? 'Recorded cost'),
+        editable: false,
+        // Not individually removable: a payment is undone as a whole, through
+        // DELETE /api/book/money/supplier-payments/:paymentId.
+        removable: false,
+        createdAt: children.reduce((min, c) => (c.createdAt < min ? c.createdAt : min), children[0].createdAt).toISOString(),
+        updatedAt: children.reduce((max, c) => (c.updatedAt > max ? c.updatedAt : max), children[0].updatedAt).toISOString(),
+        _occurredAt: payment?.paidAt ?? children[0].occurredAt,
+        _createdAt: children[0].createdAt,
+      } as MoneyRow & { _occurredAt: Date; _createdAt: Date })
+    }
+  }
+
+  const rowsWithKeys = [...paymentRows, ...eventRows, ...allocationRows] as Array<MoneyRow & { _occurredAt: Date; _createdAt: Date }>
   rowsWithKeys.sort((a, b) => {
     const t = b._occurredAt.getTime() - a._occurredAt.getTime()
     if (t !== 0) return t
@@ -181,7 +260,7 @@ async function buildJobMoney(job: { id: string; customerTotalAmount: string | nu
   const costPaidNum = sum(events.filter((e) => e.kind === 'COST_PAID').map((e) => e.amount))
 
   const inRowCount = payments.length + events.filter((e) => e.kind === 'REFUND').length
-  const outRowCount = events.filter((e) => e.kind === 'COST_PAID').length
+  const outRowCount = plainEvents.filter((e) => e.kind === 'COST_PAID').length + allocationRows.length
 
   const moneyInAmount = inRowCount > 0 ? round2(customerPaidNum + refundNum) : null
   const moneyOutAmount = outRowCount > 0 ? round2(costPaidNum) : null
@@ -305,6 +384,10 @@ export async function deleteMoneyEvent(jobId: string, moneyEventId: string, user
     where: { id: moneyEventId, jobId, isDeleted: false },
   })
   if (!event) throw { code: ErrorCode.MONEY_EVENT_NOT_FOUND, message: 'Money event not found' }
+  // A cost paid as part of one aggregate supplier payment cannot be quietly
+  // unlinked on its own: that would leave a receipt claiming to cover a cost
+  // that is no longer paid. The client is routed to the aggregate receipt.
+  if (event.supplierAccountPaymentId) supplierPaymentOwnsCost(event.supplierAccountPaymentId)
   await prisma.jobMoneyEvent.update({
     where: { id: moneyEventId },
     data: { isDeleted: true, deletedAt: new Date() },
