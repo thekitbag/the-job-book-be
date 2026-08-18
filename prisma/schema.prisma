@@ -16,13 +16,14 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  jobs                Job[]
-  reviewDecisions     ReviewDecision[]
-  passwordResetTokens PasswordResetToken[]
-  uploadedPhotos      JobPhoto[]
-  supportAuditEvents  SupportAuditEvent[]
-  createdJobContacts  JobContact[]
+  jobs                    Job[]
+  reviewDecisions         ReviewDecision[]
+  passwordResetTokens     PasswordResetToken[]
+  uploadedPhotos          JobPhoto[]
+  supportAuditEvents      SupportAuditEvent[]
+  createdJobContacts      JobContact[]
   supplierAccountPayments SupplierAccountPayment[]
+  workshopItems           WorkshopItem[]
 
   @@map("users")
 }
@@ -120,6 +121,7 @@ model Job {
   moneyEvents      JobMoneyEvent[]
   labourPeople     LabourPerson[]
   contacts         JobContact[]
+  workshopItems    WorkshopItem[]
 
   @@map("jobs")
 }
@@ -141,28 +143,28 @@ enum JobMoneyKind {
 }
 
 model JobMoneyEvent {
-  id                 String            @id @default(uuid())
-  jobId              String
-  direction          JobMoneyDirection
-  kind               JobMoneyKind
-  amount             String
-  currency           String            @default("GBP")
-  occurredAt         DateTime
-  note               String?
-  reference          String?
-  sourceMemoryItemId String?
+  id                       String            @id @default(uuid())
+  jobId                    String
+  direction                JobMoneyDirection
+  kind                     JobMoneyKind
+  amount                   String
+  currency                 String            @default("GBP")
+  occurredAt               DateTime
+  note                     String?
+  reference                String?
+  sourceMemoryItemId       String?
   // Set when this paid marker was written as part of ONE aggregate named-supplier
   // payment across jobs (supplier account settlement). Null for an ordinary
   // single mark-paid. Linked events keep working as normal paid markers for
   // Budget/paid-state, but job Money groups them into one visible allocation row
   // per job so an aggregate payment never double-counts.
   supplierAccountPaymentId String?
-  isDeleted          Boolean           @default(false)
-  deletedAt          DateTime?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  isDeleted                Boolean           @default(false)
+  deletedAt                DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
-  job                   Job                     @relation(fields: [jobId], references: [id])
+  job                    Job                     @relation(fields: [jobId], references: [id])
   supplierAccountPayment SupplierAccountPayment? @relation(fields: [supplierAccountPaymentId], references: [id])
 
   @@index([jobId, occurredAt])
@@ -192,8 +194,8 @@ model SupplierAccountPayment {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  owner        User            @relation(fields: [ownerUserId], references: [id])
-  moneyEvents  JobMoneyEvent[]
+  owner       User            @relation(fields: [ownerUserId], references: [id])
+  moneyEvents JobMoneyEvent[]
 
   @@unique([ownerUserId, clientRequestId])
   @@index([ownerUserId, supplierName, paidAt])
@@ -209,17 +211,17 @@ enum JobStatus {
 }
 
 model RawNote {
-  id           String         @id @default(uuid())
+  id           String     @id @default(uuid())
   jobId        String
   clientNoteId String
   capturedAt   DateTime
-  uploadedAt   DateTime       @default(now())
+  uploadedAt   DateTime   @default(now())
   mimeType     String
   durationMs   Int?
   sizeBytes    Int
-  serverStatus NoteStatus     @default(UPLOADED)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  serverStatus NoteStatus @default(UPLOADED)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   job            Job             @relation(fields: [jobId], references: [id])
   audioObject    AudioObject?
@@ -387,10 +389,10 @@ enum ReviewDecisionAction {
 }
 
 model ReviewDecision {
-  id              String               @id @default(uuid())
-  jobId           String
-  decidedBy       String
-  action          ReviewDecisionAction
+  id                     String               @id @default(uuid())
+  jobId                  String
+  decidedBy              String
+  action                 ReviewDecisionAction
   candidateFactId        String?
   sectionKey             String?
   reason                 String?
@@ -406,40 +408,40 @@ model ReviewDecision {
 }
 
 model MemoryItem {
-  id                    String   @id @default(uuid())
-  jobId                 String
-  reviewDecisionId      String
-  sourceCandidateFactId String?
-  memoryType            FactType
-  isManual              Boolean  @default(false)
-  summary               String
-  materialName          String?
-  quantity              String?
-  unit                  String?
-  supplierName          String?
-  deliveryTiming        String?
-  locationOrUse         String?
-  costAmount            String?
-  costCurrency          String?
-  costQualifier         String?
-  totalCostAmount       String?
-  labourHours           String?
-  labourPerson          String?
-  labourTask            String?
+  id                       String    @id @default(uuid())
+  jobId                    String
+  reviewDecisionId         String
+  sourceCandidateFactId    String?
+  memoryType               FactType
+  isManual                 Boolean   @default(false)
+  summary                  String
+  materialName             String?
+  quantity                 String?
+  unit                     String?
+  supplierName             String?
+  deliveryTiming           String?
+  locationOrUse            String?
+  costAmount               String?
+  costCurrency             String?
+  costQualifier            String?
+  totalCostAmount          String?
+  labourHours              String?
+  labourPerson             String?
+  labourTask               String?
   // Labour people + per-entry Budget rules. labourPersonId links a labour entry
   // to a lightweight LabourPerson. labourBudgetEnabled === true means this entry
   // may contribute to Budget when it has trusted GBP cost; false = hours-only
   // (never Budget cost, even if a rate is stored for reference); null is a
   // legacy/migration-only state treated conservatively as not-budget.
-  labourPersonId        String?
-  labourBudgetEnabled   Boolean?
-  happenedAt            DateTime?
-  unresolvedFlags       String[] @default([])
-  budgetCategoryId      String?
-  isRemoved             Boolean   @default(false)
-  removedAt             DateTime?
-  removedByUserId       String?
-  removedReason         String?
+  labourPersonId           String?
+  labourBudgetEnabled      Boolean?
+  happenedAt               DateTime?
+  unresolvedFlags          String[]  @default([])
+  budgetCategoryId         String?
+  isRemoved                Boolean   @default(false)
+  removedAt                DateTime?
+  removedByUserId          String?
+  removedReason            String?
   // Returned materials: a RETURNED_MATERIAL item records the returned quantity
   // (quantity/unit), merchant (supplierName), and — separate from spend cost
   // fields — a trusted refund. returnedFromMemoryItemId is a soft string link
@@ -447,14 +449,15 @@ model MemoryItem {
   returnedFromMemoryItemId String?
   refundAmount             String?
   refundCurrency           String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   job            Job                @relation(fields: [jobId], references: [id])
   reviewDecision ReviewDecision     @relation(fields: [reviewDecisionId], references: [id])
   sourceFact     CandidateFact?     @relation(fields: [sourceCandidateFactId], references: [id])
   budgetCategory JobBudgetCategory? @relation(fields: [budgetCategoryId], references: [id])
   linkedPhotos   JobPhoto[]
+  workshopItems  WorkshopItem[]
 
   @@index([jobId, budgetCategoryId])
   @@index([jobId, isRemoved])
@@ -497,25 +500,25 @@ enum JobEvidenceFileKind {
 // this table and the private object-storage path. The table name stays
 // `job_photos` for compatibility.
 model JobPhoto {
-  id                 String   @id @default(uuid())
+  id                 String              @id @default(uuid())
   jobId              String
   uploadedByUserId   String
   kind               JobEvidenceKind     @default(PHOTO)
   fileKind           JobEvidenceFileKind @default(IMAGE)
   descriptor         String?
   originalFileName   String?
-  storageKey         String   @unique
+  storageKey         String              @unique
   bucket             String
   mimeType           String
   sizeBytes          Int
   linkedNoteId       String?
   linkedMemoryItemId String?
-  isDeleted          Boolean   @default(false)
+  isDeleted          Boolean             @default(false)
   deletedAt          DateTime?
   deletedByUserId    String?
-  uploadedAt         DateTime @default(now())
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  uploadedAt         DateTime            @default(now())
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   job              Job         @relation(fields: [jobId], references: [id])
   uploadedBy       User        @relation(fields: [uploadedByUserId], references: [id])
@@ -586,4 +589,58 @@ model QueueItem {
 
   @@index([jobId])
   @@map("queue_items")
+}
+
+// Workshop: availability memory over real leftovers, not inventory and not
+// finance. A WorkshopItem is the CURRENT availability state of material Mike
+// thinks may still be in the workshop — either linked to a confirmed
+// `leftover_material` memory item in a job (sourceKind LEFTOVER) or added by
+// hand with no source (sourceKind MANUAL).
+//
+// Deliberately a separate record rather than a flag on MemoryItem: the source
+// memory item stays untouched evidence (purchase, cost, paid state, job
+// status), so no Workshop action can move Budget or Money. Every source-side
+// Workshop state in read models is DERIVED from this row, so there is no second
+// copy to fall out of step and a failed action cannot leave the two disagreeing.
+//
+// One row per source leftover for its whole life: moving again after an undo or
+// a terminal outcome reactivates the same row rather than creating a second
+// availability record. A partial unique index (see the migration) enforces at
+// most one AVAILABLE row per source memory item.
+//
+// `roughAmount` is free text ("about half a box"). Never parsed, normalised,
+// totalled or sharpened — blank is a valid answer, not missing data.
+enum WorkshopItemState {
+  AVAILABLE
+  USED_UP
+  WASNT_THERE
+  MOVED_BACK
+}
+
+enum WorkshopItemSourceKind {
+  LEFTOVER
+  MANUAL
+}
+
+model WorkshopItem {
+  id                 String                 @id @default(uuid())
+  ownerUserId        String
+  materialName       String
+  roughAmount        String?
+  sourceKind         WorkshopItemSourceKind
+  sourceJobId        String?
+  sourceMemoryItemId String?
+  state              WorkshopItemState      @default(AVAILABLE)
+  enteredWorkshopAt  DateTime
+  resolvedAt         DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  owner            User        @relation(fields: [ownerUserId], references: [id])
+  sourceJob        Job?        @relation(fields: [sourceJobId], references: [id])
+  sourceMemoryItem MemoryItem? @relation(fields: [sourceMemoryItemId], references: [id])
+
+  @@index([ownerUserId, state, enteredWorkshopAt])
+  @@index([sourceJobId, sourceMemoryItemId])
+  @@map("workshop_items")
 }

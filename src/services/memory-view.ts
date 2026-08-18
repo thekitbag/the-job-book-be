@@ -12,6 +12,8 @@ import { classifySpend, sumKnownSpend } from '../lib/spend-classification.js'
 import type { SpendClassifiable } from '../lib/spend-classification.js'
 import { MEMORY_TYPES, isCategoryAssignableMemoryType } from '../lib/memory-types.js'
 import { ukLocalDayString } from '../lib/dates.js'
+import { sourceStateFor, workshopDateLabel } from '../lib/workshop.js'
+import type { StoredWorkshopState } from '../lib/workshop.js'
 
 // Trusted-memory sections come from the shared registry; UNCLEAR is excluded
 // because it is never a trusted memory type and has no memory-view section.
@@ -538,6 +540,136 @@ const SECTION_CONFIG = [
   { key: 'general_notes', label: 'Notes' },
 ] as const
 
+// The Prisma shape the item projection reads: a memory item with its source
+// candidate fact, note and transcript joined in.
+export interface MemoryItemWithSource {
+  id: string
+  memoryType: string
+  summary: string
+  materialName: string | null
+  quantity: string | null
+  unit: string | null
+  supplierName: string | null
+  deliveryTiming: string | null
+  locationOrUse: string | null
+  costAmount: string | null
+  costCurrency: string | null
+  costQualifier: string | null
+  totalCostAmount: string | null
+  labourHours: string | null
+  labourPerson: string | null
+  labourTask: string | null
+  labourPersonId: string | null
+  labourBudgetEnabled: boolean | null
+  happenedAt: Date | null
+  isManual: boolean
+  budgetCategoryId: string | null
+  returnedFromMemoryItemId: string | null
+  refundAmount: string | null
+  refundCurrency: string | null
+  unresolvedFlags: string[]
+  sourceCandidateFactId: string | null
+  reviewDecisionId: string
+  createdAt: Date
+  updatedAt: Date
+  sourceFact: {
+    id: string
+    sourceNoteId: string
+    sourceTranscriptId: string
+    uncertaintyFlags: string[]
+    sourceNote: { capturedAt: Date }
+    transcript: { text: string | null } | null
+  } | null
+}
+
+// The linked Workshop availability row, as much of it as a source item needs.
+export interface LinkedWorkshopItem {
+  id: string
+  state: string
+  roughAmount: string | null
+  enteredWorkshopAt: Date
+  resolvedAt: Date | null
+}
+
+// One memory-view item, as the frontend consumes it. Extracted so the Workshop
+// write routes can return the SAME source-item shape a refetch of the memory
+// view would give, instead of a second hand-rolled projection that could drift.
+//
+// `workshop` is the source leftover's linked Workshop availability row, or null.
+// Every Workshop field below is derived from that row; nothing about the item's
+// own purchase, cost, paid state or quantity is touched by a Workshop action.
+export function buildMemoryViewItem(
+  m: MemoryItemWithSource,
+  paidEvent: { id: string; occurredAt: Date } | null,
+  workshop: LinkedWorkshopItem | null = null,
+) {
+  const fact = m.sourceFact ?? null
+  return {
+    id: m.id,
+    memoryType: (m.memoryType as string).toLowerCase(),
+    summary: m.summary,
+    materialName: m.materialName,
+    quantity: m.quantity,
+    unit: m.unit,
+    supplierName: m.supplierName,
+    deliveryTiming: m.deliveryTiming,
+    locationOrUse: m.locationOrUse,
+    costAmount: m.costAmount,
+    costCurrency: m.costCurrency,
+    costQualifier: m.costQualifier,
+    totalCostAmount: m.totalCostAmount,
+    labourHours: m.labourHours,
+    labourPerson: m.labourPerson,
+    labourTask: m.labourTask,
+    labourPersonId: m.labourPersonId,
+    labourBudgetEnabled: m.labourBudgetEnabled,
+    happenedAt: m.happenedAt,
+    isManual: m.isManual,
+    budgetCategoryId: m.budgetCategoryId,
+    // Whether Fix memory may offer a Budget category for this item, read
+    // from the memory-type registry so clients never hard-code the list.
+    canAssignBudgetCategory: isCategoryAssignableMemoryType(m.memoryType as string),
+    returnedFromMemoryItemId: m.returnedFromMemoryItemId,
+    refundAmount: m.refundAmount,
+    refundCurrency: m.refundCurrency,
+    refundLabel: formatRefundLabel(m.refundAmount, m.refundCurrency),
+    unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
+    lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
+    isPaid: paidEvent !== null,
+    paidMoneyEventId: paidEvent?.id ?? null,
+    paidAt: paidEvent?.occurredAt ?? null,
+    uncertaintyFlags: m.unresolvedFlags,
+    sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
+    sourceCandidateFactId: m.sourceCandidateFactId,
+    reviewDecisionId: m.reviewDecisionId,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+    // ── Workshop (availability memory) ──────────────────────────────────────
+    // Additive, derived, and never finance: these say what Mike currently
+    // thinks is left of this material, not what it cost or whether it is paid.
+    workshopState: sourceStateFor(workshop?.state as StoredWorkshopState | undefined),
+    workshopItemId: workshop?.id ?? null,
+    // The latest Workshop wording for this material, kept separate from the
+    // item's own quantity/unit so a rough amount can never overwrite the
+    // remembered purchase quantity. Still present after an undo or a terminal
+    // outcome, so putting it back restores the wording Mike last used.
+    workshopRoughAmount: workshop?.roughAmount ?? null,
+    workshopEnteredAt: workshop?.enteredWorkshopAt ?? null,
+    workshopEnteredLabel: workshop ? workshopDateLabel(workshop.enteredWorkshopAt) : null,
+    workshopResolvedAt: workshop?.resolvedAt ?? null,
+    workshopResolvedLabel: workshop?.resolvedAt ? workshopDateLabel(workshop.resolvedAt) : null,
+    source: fact
+      ? {
+          candidateFactId: fact.id,
+          noteId: fact.sourceNoteId,
+          transcriptId: fact.sourceTranscriptId,
+          capturedAt: fact.sourceNote.capturedAt,
+          transcriptText: fact.transcript?.text ?? null,
+        }
+      : null,
+  }
+}
+
 export async function getMemoryView(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
@@ -555,7 +687,7 @@ export async function getMemoryView(jobId: string, userId: string) {
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
   if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
-  const [memoryItems, paidEvents, { sections: queueSections }] = await Promise.all([
+  const [memoryItems, paidEvents, workshopItems, { sections: queueSections }] = await Promise.all([
     prisma.memoryItem.findMany({
       // Active job record only — soft-removed items are invisible here
       where: { jobId, isRemoved: false },
@@ -572,9 +704,28 @@ export async function getMemoryView(jobId: string, userId: string) {
     prisma.jobMoneyEvent?.findMany
       ? prisma.jobMoneyEvent.findMany({ where: { jobId, kind: 'COST_PAID', isDeleted: false }, select: { id: true, sourceMemoryItemId: true, occurredAt: true } })
       : Promise.resolve([]),
+    // Workshop availability for this job's leftovers. Read-only here: the memory
+    // view never creates or resolves a Workshop item, it only reports the state
+    // the Workshop routes wrote.
+    prisma.workshopItem?.findMany
+      ? prisma.workshopItem.findMany({
+          where: { sourceJobId: jobId, ownerUserId: userId },
+          select: { id: true, sourceMemoryItemId: true, state: true, roughAmount: true, enteredWorkshopAt: true, resolvedAt: true },
+          orderBy: [{ enteredWorkshopAt: 'desc' }, { id: 'asc' }],
+        })
+      : Promise.resolve([]),
     deriveFreshQueueSections(jobId, new Date()),
   ])
   const paidEventByItem = new Map((paidEvents ?? []).flatMap((event) => event.sourceMemoryItemId ? [[event.sourceMemoryItemId, event] as const] : []))
+  // At most one Workshop row exists per source leftover (a partial unique index
+  // enforces one AVAILABLE row, and a re-move reuses the existing row), so the
+  // first row wins defensively rather than the states being merged.
+  const workshopBySourceItem = new Map<string, LinkedWorkshopItem>()
+  for (const w of workshopItems ?? []) {
+    if (w.sourceMemoryItemId && !workshopBySourceItem.has(w.sourceMemoryItemId)) {
+      workshopBySourceItem.set(w.sourceMemoryItemId, w)
+    }
+  }
 
   // Group memory items by section key derived from memoryType
   const bySection = new Map<string, typeof memoryItems>(SECTION_CONFIG.map((s) => [s.key, []]))
@@ -586,60 +737,9 @@ export async function getMemoryView(jobId: string, userId: string) {
   const sections = SECTION_CONFIG.map(({ key, label }) => ({
     key,
     label,
-    items: (bySection.get(key) ?? []).map((m) => {
-      const fact = m.sourceFact ?? null
-      const paidEvent = paidEventByItem.get(m.id) ?? null
-      return {
-        id: m.id,
-        memoryType: (m.memoryType as string).toLowerCase(),
-        summary: m.summary,
-        materialName: m.materialName,
-        quantity: m.quantity,
-        unit: m.unit,
-        supplierName: m.supplierName,
-        deliveryTiming: m.deliveryTiming,
-        locationOrUse: m.locationOrUse,
-        costAmount: m.costAmount,
-        costCurrency: m.costCurrency,
-        costQualifier: m.costQualifier,
-        totalCostAmount: m.totalCostAmount,
-        labourHours: m.labourHours,
-        labourPerson: m.labourPerson,
-        labourTask: m.labourTask,
-        labourPersonId: m.labourPersonId,
-        labourBudgetEnabled: m.labourBudgetEnabled,
-        happenedAt: m.happenedAt,
-        isManual: m.isManual,
-        budgetCategoryId: m.budgetCategoryId,
-        // Whether Fix memory may offer a Budget category for this item, read
-        // from the memory-type registry so clients never hard-code the list.
-        canAssignBudgetCategory: isCategoryAssignableMemoryType(m.memoryType as string),
-        returnedFromMemoryItemId: m.returnedFromMemoryItemId,
-        refundAmount: m.refundAmount,
-        refundCurrency: m.refundCurrency,
-        refundLabel: formatRefundLabel(m.refundAmount, m.refundCurrency),
-        unitCostLabel: formatUnitCostLabel(m.costAmount, m.costCurrency, m.costQualifier),
-        lineTotalLabel: formatLineTotalLabel(m.totalCostAmount, m.costCurrency),
-        isPaid: paidEvent !== null,
-        paidMoneyEventId: paidEvent?.id ?? null,
-        paidAt: paidEvent?.occurredAt ?? null,
-        uncertaintyFlags: m.unresolvedFlags,
-        sourceUncertaintyFlags: fact?.uncertaintyFlags ?? [],
-        sourceCandidateFactId: m.sourceCandidateFactId,
-        reviewDecisionId: m.reviewDecisionId,
-        createdAt: m.createdAt,
-        updatedAt: m.updatedAt,
-        source: fact
-          ? {
-              candidateFactId: fact.id,
-              noteId: fact.sourceNoteId,
-              transcriptId: fact.sourceTranscriptId,
-              capturedAt: fact.sourceNote.capturedAt,
-              transcriptText: fact.transcript?.text ?? null,
-            }
-          : null,
-      }
-    }),
+    items: (bySection.get(key) ?? []).map((m) =>
+      buildMemoryViewItem(m, paidEventByItem.get(m.id) ?? null, workshopBySourceItem.get(m.id) ?? null),
+    ),
   }))
 
   // stillToCheck: current draft queue items from the fresh generation

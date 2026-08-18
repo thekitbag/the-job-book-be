@@ -94,6 +94,12 @@ const STATUS_MAP: Record<string, number> = {
   // told to re-read the account (409, not 400 — the request was well-formed).
   [ErrorCode.SUPPLIER_PAYMENT_STALE_SELECTION]: 409,
   [ErrorCode.SUPPLIER_PAYMENT_OWNS_COST]: 400,
+  [ErrorCode.WORKSHOP_ITEM_NOT_FOUND]: 404,
+  [ErrorCode.WORKSHOP_SOURCE_NOT_FOUND]: 404,
+  // The source leftover is already in the Workshop: a well-formed request that
+  // would create a second availability record for the same real material.
+  [ErrorCode.WORKSHOP_SOURCE_ALREADY_MOVED]: 400,
+  [ErrorCode.WORKSHOP_INVALID_STATE]: 400,
 }
 
 export function handleServiceError(err: unknown, reply: FastifyReply) {
