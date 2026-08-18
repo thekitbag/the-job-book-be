@@ -747,14 +747,21 @@ describe('Source changes are reflected without duplicate records', () => {
   })
 
   it('writes nothing when the cross-job Money page is opened', async () => {
-    const counts = async () => ({
-      memoryItems: await prisma.memoryItem.count(),
-      moneyEvents: await prisma.jobMoneyEvent.count(),
-      payments: await prisma.jobPayment.count(),
-      decisions: await prisma.reviewDecision.count(),
-      queueItems: await prisma.queueItem.count(),
-      jobs: await prisma.job.count(),
-    })
+    // Scoped to this file's own fixture: the test database is shared, so a
+    // global count would drift on unrelated rows and prove nothing here.
+    const counts = async () => {
+      const owners = { in: [ownerId, otherOwnerId] }
+      const jobIds = (await prisma.job.findMany({ where: { ownerUserId: owners }, select: { id: true } })).map((j) => j.id)
+      const scope = { jobId: { in: jobIds } }
+      return {
+        memoryItems: await prisma.memoryItem.count({ where: scope }),
+        moneyEvents: await prisma.jobMoneyEvent.count({ where: scope }),
+        payments: await prisma.jobPayment.count({ where: scope }),
+        decisions: await prisma.reviewDecision.count({ where: scope }),
+        queueItems: await prisma.queueItem.count({ where: scope }),
+        jobs: await prisma.job.count({ where: { ownerUserId: owners } }),
+      }
+    }
     const before = await counts()
     await bookMoney()
     await bookMoney()
