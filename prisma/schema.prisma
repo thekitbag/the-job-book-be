@@ -22,6 +22,7 @@ model User {
   uploadedPhotos      JobPhoto[]
   supportAuditEvents  SupportAuditEvent[]
   createdJobContacts  JobContact[]
+  supplierAccountPayments SupplierAccountPayment[]
 
   @@map("users")
 }
@@ -150,17 +151,54 @@ model JobMoneyEvent {
   note               String?
   reference          String?
   sourceMemoryItemId String?
+  // Set when this paid marker was written as part of ONE aggregate named-supplier
+  // payment across jobs (supplier account settlement). Null for an ordinary
+  // single mark-paid. Linked events keep working as normal paid markers for
+  // Budget/paid-state, but job Money groups them into one visible allocation row
+  // per job so an aggregate payment never double-counts.
+  supplierAccountPaymentId String?
   isDeleted          Boolean           @default(false)
   deletedAt          DateTime?
   createdAt          DateTime          @default(now())
   updatedAt          DateTime          @updatedAt
 
-  job Job @relation(fields: [jobId], references: [id])
+  job                   Job                     @relation(fields: [jobId], references: [id])
+  supplierAccountPayment SupplierAccountPayment? @relation(fields: [supplierAccountPaymentId], references: [id])
 
   @@index([jobId, occurredAt])
   @@index([jobId, isDeleted])
   @@index([jobId, sourceMemoryItemId])
+  @@index([supplierAccountPaymentId])
   @@map("job_money_events")
+}
+
+// One real payment Mike made to one named supplier, covering whole recorded
+// costs across several jobs. Durable and aggregate by design: the receipt,
+// account payment history and Undo all hang off this row, so a settlement stays
+// reconstructible after every covered cost has left the unpaid account list.
+// It records what a payment covered — never bank reconciliation or a supplier
+// statement match. Budget is untouched by settlement.
+model SupplierAccountPayment {
+  id              String    @id @default(uuid())
+  ownerUserId     String
+  supplierName    String
+  amount          String
+  currency        String    @default("GBP")
+  paidAt          DateTime
+  // Frontend-generated per submit; makes create idempotent under retries.
+  clientRequestId String
+  isDeleted       Boolean   @default(false)
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  owner        User            @relation(fields: [ownerUserId], references: [id])
+  moneyEvents  JobMoneyEvent[]
+
+  @@unique([ownerUserId, clientRequestId])
+  @@index([ownerUserId, supplierName, paidAt])
+  @@index([ownerUserId, isDeleted, paidAt])
+  @@map("supplier_account_payments")
 }
 
 enum JobStatus {

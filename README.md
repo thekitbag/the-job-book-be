@@ -82,6 +82,7 @@ Core local dev:
 | `FRONTEND_ORIGIN` / `CORS_ORIGIN` | `https://localhost:5173` | Allowed frontend origin(s), comma-separated |
 | `PORT` / `HOST` | `3000` / `0.0.0.0` | |
 | `LOG_LEVEL` | `info` | |
+| `SUPPLIER_ACCOUNT_SETTLEMENT_ENABLED` | `false` | Backend feature gate for supplier account settlement writes. Off unless set to a truthy value (`true`/`1`/`yes`/`on`); the write routes then return `403 SUPPLIER_SETTLEMENT_DISABLED`. Reads are never gated. |
 
 Production requires more (R2 credentials, Resend key/from address, `PASSWORD_RESET_URL_BASE`, `INTERNAL_INSPECTION_KEY`, …) and is validated at startup — see `src/config/production.ts` for the authoritative list.
 
