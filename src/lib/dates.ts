@@ -87,3 +87,18 @@ const ukShortDateFormat = new Intl.DateTimeFormat('en-GB', {
 export function ukShortDateLabel(instant: Date): string {
   return ukShortDateFormat.format(instant)
 }
+
+// Day and month only: "7 Jul". Used where a date sits inline next to other text
+// on a narrow screen and the year would be noise — a supplier payment receipt
+// line reads "7 Jul · Timber · £500" under a header already carrying the full
+// payment date. The full instant always travels alongside it as an ISO string,
+// so nothing is lost from the contract, only from the label.
+const ukDayMonthFormat = new Intl.DateTimeFormat('en-GB', {
+  timeZone: UK_TIME_ZONE,
+  day: 'numeric',
+  month: 'short',
+})
+
+export function ukDayMonthLabel(instant: Date): string {
+  return ukDayMonthFormat.format(instant)
+}
