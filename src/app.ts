@@ -29,6 +29,7 @@ import bookMoneyRoutes from './routes/book-money.js'
 import supplierPaymentRoutes from './routes/supplier-payments.js'
 import labourPeopleRoutes from './routes/labour-people.js'
 import jobContactsRoutes from './routes/job-contacts.js'
+import workshopRoutes from './routes/workshop.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
 
 export interface AppOptions {
@@ -94,6 +95,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(supplierPaymentRoutes)
   fastify.register(labourPeopleRoutes)
   fastify.register(jobContactsRoutes)
+  fastify.register(workshopRoutes)
 
   // @fastify/multipart v9 calls req.raw.destroy(err) when the file size limit is exceeded,
   // which bypasses route try/catch and lands here. Remap to our stable error code.
