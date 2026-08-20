@@ -26,7 +26,7 @@ import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import { classifySpend } from '../lib/spend-classification.js'
 import { strictParsePositive } from '../lib/cost-utils.js'
-import { ukLocalNoon, ukLocalDayString, ukShortDateLabel } from '../lib/dates.js'
+import { ukLocalNoon, ukLocalDayString, ukShortDateLabel, ukDayMonthLabel } from '../lib/dates.js'
 import { isSupplierAccountSettlementEnabled } from '../config/features.js'
 import {
   gbp,
@@ -41,6 +41,11 @@ import {
 } from '../lib/supplier-account.js'
 
 const DAY_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+// What a receipt line says when the source cost has no remembered purchase
+// date. Stated plainly so the gap reads as a gap in the memory, not as a
+// backend that failed to send a date.
+export const SOURCE_DATE_NOT_RECORDED = 'Date not recorded'
 
 // Every revalidation failure reads the same to the client: the account moved
 // under the selection, so re-read it. The `reason` is diagnostic detail, never
@@ -87,7 +92,9 @@ export interface SupplierPaymentSourceLine {
   currency: 'GBP'
   amountLabel: string
   sourceDate: string | null
-  sourceDateLabel: string | null
+  // Always a string to display. A cost with no remembered purchase date says so
+  // in words rather than leaving the client to fill the gap.
+  sourceDateLabel: string
   budgetCategoryId: string | null
   budgetCategoryName: string | null
 }
@@ -258,10 +265,22 @@ async function buildReceipt(payment: PaymentRow): Promise<SupplierAccountPayment
       amount: event.amount,
       currency: 'GBP',
       amountLabel: gbp(event.amount),
+      // WHEN THE PURCHASE HAPPENED — resolved live from the source item's
+      // trusted `happenedAt` on every read, which is what makes a later source
+      // date correction show up here without touching the payment. Distinct
+      // from the receipt's own paidAt: this is not when the money left.
+      //
+      // There is deliberately NO fallback. If the memory does not record when
+      // the purchase happened, the receipt says so; guessing from the payment
+      // date, the record's createdAt, the upload or the review would invent
+      // evidence Mike never gave.
       sourceDate: sourceAt ? sourceAt.toISOString() : null,
-      sourceDateLabel: sourceAt ? ukShortDateLabel(sourceAt) : null,
+      sourceDateLabel: sourceAt ? ukDayMonthLabel(sourceAt) : SOURCE_DATE_NOT_RECORDED,
       budgetCategoryId: item?.budgetCategoryId ?? null,
       budgetCategoryName: item?.budgetCategoryId ? categoryNameById.get(item.budgetCategoryId) ?? null : null,
+      // Ordering only, never displayed: an undated line still needs a stable
+      // place in the list, so it falls back to when it was recorded. That
+      // fallback must not reach `sourceDate` above.
       _sortAt: (item?.happenedAt ?? item?.createdAt ?? event.createdAt).getTime(),
     }
     const bucket = linesByJob.get(event.jobId) ?? []

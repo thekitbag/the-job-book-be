@@ -302,7 +302,9 @@ describe('POST /api/book/money/supplier-payments', () => {
       amount: '50',
       amountLabel: '£50',
       quantityLabel: '10 sheets',
-      sourceDateLabel: '1 Jun 2026',
+      // The purchase date, day and month only — distinct from the receipt's own
+      // paidAtLabel, which keeps its year.
+      sourceDateLabel: '1 Jun',
     })
   })
 
