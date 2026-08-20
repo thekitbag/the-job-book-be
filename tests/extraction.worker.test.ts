@@ -828,7 +828,41 @@ describe('runExtraction — labour happenedAt (effective day)', () => {
     expect(data.happenedAt?.toISOString()).toBe('2026-07-08T11:00:00.000Z')
   })
 
-  it('leaves happenedAt null for non-labour facts that state no day', async () => {
+  it('defaults a bought material happenedAt to the capture day when no day is spoken', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Got timber from Sydenhams, five hundred quid.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{
+      factType: 'ordered_material', summary: 'Bought timber from Sydenhams for £500',
+      materialName: 'Timber', supplierName: 'Sydenhams',
+      costAmount: '500', costCurrency: 'GBP', costQualifier: 'total',
+      confidenceLabel: 'high', confidenceReason: 'stated', uncertaintyFlags: [],
+    }]))
+
+    // A bought material can end up as a dated line inside a supplier payment
+    // receipt, so it records the day the note was captured rather than being
+    // stored dateless and having a date guessed at render time.
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-08T11:00:00.000Z')
+  })
+
+  it('still prefers a spoken day over the capture day for a bought material', async () => {
+    const { prisma } = await import('../src/db/client.js')
+    vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
+      makeTranscript({ text: 'Picked the timber up yesterday.' }),
+    )
+    await runExtraction(TRANSCRIPT_ID, labourStub([{
+      factType: 'ordered_material', summary: 'Bought timber yesterday', materialName: 'Timber',
+      happenedAt: 'yesterday',
+      confidenceLabel: 'high', confidenceReason: 'stated', uncertaintyFlags: [],
+    }]))
+
+    const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
+    expect(data.happenedAt?.toISOString()).toBe('2026-07-07T11:00:00.000Z')
+  })
+
+  it('leaves happenedAt null for other fact types that state no day', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
       makeTranscript({ text: 'Used 6 OSB boards.' }),

@@ -15,25 +15,33 @@ export interface MemoryTypeInfo {
   sectionKey: string
   canAssignBudgetCategory: boolean
   canContributeSpend: boolean
+  // True when this type's date is load-bearing evidence someone reads back —
+  // a supplier payment receipt line, a labour day total — so a new memory of
+  // this type records the day it was captured or added when no date was given,
+  // rather than being stored dateless and having a date guessed at render time.
+  //
+  // False types are still dated when a date IS given; they simply do not get a
+  // default, because nothing reads their date as evidence.
+  defaultsToRecordedDay: boolean
 }
 
 export const MEMORY_TYPES: readonly MemoryTypeInfo[] = [
-  { storedType: 'ORDERED_MATERIAL', apiType: 'ordered_material', sectionKey: 'ordered_materials', canAssignBudgetCategory: true, canContributeSpend: true },
-  { storedType: 'USED_MATERIAL', apiType: 'used_material', sectionKey: 'used_materials', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'LEFTOVER_MATERIAL', apiType: 'leftover_material', sectionKey: 'leftovers', canAssignBudgetCategory: false, canContributeSpend: false },
+  { storedType: 'ORDERED_MATERIAL', apiType: 'ordered_material', sectionKey: 'ordered_materials', canAssignBudgetCategory: true, canContributeSpend: true, defaultsToRecordedDay: true },
+  { storedType: 'USED_MATERIAL', apiType: 'used_material', sectionKey: 'used_materials', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'LEFTOVER_MATERIAL', apiType: 'leftover_material', sectionKey: 'leftovers', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
   // Returned materials are trusted memory but never positive spend: a trusted
   // refund reduces net known cost separately (see memory-view refund summary).
-  { storedType: 'RETURNED_MATERIAL', apiType: 'returned_material', sectionKey: 'returned_materials', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'SUPPLIER_DELIVERY_NOTE', apiType: 'supplier_delivery_note', sectionKey: 'supplier_delivery_notes', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'CUSTOMER_CHANGE', apiType: 'customer_change', sectionKey: 'customer_changes', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'WATCH_OUT', apiType: 'watch_out', sectionKey: 'watch_outs', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'LABOUR', apiType: 'labour', sectionKey: 'labour', canAssignBudgetCategory: true, canContributeSpend: true },
+  { storedType: 'RETURNED_MATERIAL', apiType: 'returned_material', sectionKey: 'returned_materials', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'SUPPLIER_DELIVERY_NOTE', apiType: 'supplier_delivery_note', sectionKey: 'supplier_delivery_notes', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'CUSTOMER_CHANGE', apiType: 'customer_change', sectionKey: 'customer_changes', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'WATCH_OUT', apiType: 'watch_out', sectionKey: 'watch_outs', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'LABOUR', apiType: 'labour', sectionKey: 'labour', canAssignBudgetCategory: true, canContributeSpend: true, defaultsToRecordedDay: true },
   // General Budget cost: trusted or candidate job cost — labour cost, plant, hire,
   // subcontractor, or other non-material costs. Labour tracks hours only; cost
   // lives here. Trusted GBP totals count toward Budget regardless of paid state.
-  { storedType: 'BUDGET_COST', apiType: 'budget_cost', sectionKey: 'budget_costs', canAssignBudgetCategory: true, canContributeSpend: true },
-  { storedType: 'GENERAL_NOTE', apiType: 'general_note', sectionKey: 'general_notes', canAssignBudgetCategory: false, canContributeSpend: false },
-  { storedType: 'UNCLEAR', apiType: 'unclear', sectionKey: 'unclear_items', canAssignBudgetCategory: false, canContributeSpend: false },
+  { storedType: 'BUDGET_COST', apiType: 'budget_cost', sectionKey: 'budget_costs', canAssignBudgetCategory: true, canContributeSpend: true, defaultsToRecordedDay: false },
+  { storedType: 'GENERAL_NOTE', apiType: 'general_note', sectionKey: 'general_notes', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
+  { storedType: 'UNCLEAR', apiType: 'unclear', sectionKey: 'unclear_items', canAssignBudgetCategory: false, canContributeSpend: false, defaultsToRecordedDay: false },
 ] as const
 
 const BY_STORED = new Map(MEMORY_TYPES.map((t) => [t.storedType, t]))
@@ -83,4 +91,18 @@ export function isCategoryAssignableApiMemoryType(apiType: string): boolean {
 // Only bought/ordered materials and labour can contribute to known spend.
 export function isSpendMemoryType(storedType: string): boolean {
   return BY_STORED.get(storedType)?.canContributeSpend ?? false
+}
+
+// Types whose date is evidence: a bought/ordered material can appear as a dated
+// line inside a supplier payment receipt, and labour rolls up into day totals.
+// Both therefore record a day at creation/confirmation time when none was given
+// — the note's capture day for voice, today for a direct add. Anything else
+// keeps a null date, and a reader is told the date is not recorded rather than
+// being shown a guess.
+export function memoryTypeDefaultsToRecordedDay(storedType: string): boolean {
+  return BY_STORED.get(storedType)?.defaultsToRecordedDay ?? false
+}
+
+export function apiMemoryTypeDefaultsToRecordedDay(apiType: string): boolean {
+  return BY_API.get(apiType)?.defaultsToRecordedDay ?? false
 }

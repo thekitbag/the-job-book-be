@@ -35,7 +35,7 @@ export function createReviewQueuePrismaMock() {
     rawNote: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     audioObject: { create: vi.fn() },
     transcript: { create: vi.fn(), update: vi.fn(), findFirst: vi.fn() },
-    candidateFact: { findMany: vi.fn(), updateMany: vi.fn() },
+    candidateFact: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
     reviewDecision: { create: vi.fn() },
     jobBudgetCategory: { findMany: vi.fn(), findFirst: vi.fn() },
     labourPerson: { findMany: vi.fn(), findFirst: vi.fn() },
@@ -61,6 +61,11 @@ export async function resetReviewQueueMocks() {
   vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
   vi.mocked((prisma.candidateFact as any).updateMany).mockResolvedValue({ count: 1 })
+  // Confirm/correct look up the source note's capture day to date a memory whose
+  // type reads its date back as evidence and whose draft carries none.
+  vi.mocked((prisma.candidateFact as any).findUnique).mockResolvedValue({
+    sourceNote: { capturedAt: TODAY_CAPTURE },
+  })
   vi.mocked(prisma.queueItem.deleteMany as any).mockResolvedValue({ count: 0 })
   vi.mocked(prisma.queueItem.createMany as any).mockResolvedValue({ count: 0 })
   vi.mocked(prisma.queueItem.findMany as any).mockResolvedValue([])

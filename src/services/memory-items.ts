@@ -11,8 +11,8 @@ import {
   strictParsePositive,
 } from '../lib/cost-utils.js'
 import { assertAssignableCategory } from './budget.js'
-import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType } from '../lib/memory-types.js'
-import { ukLocalNoon } from '../lib/dates.js'
+import { isCategoryAssignableMemoryType, sectionKeyForApiMemoryType, memoryTypeDefaultsToRecordedDay } from '../lib/memory-types.js'
+import { ukLocalNoon, ukLocalDayString } from '../lib/dates.js'
 import { refundMoneyEventData, costPaidMoneyEventData } from './money.js'
 import { requireJobLabourPerson } from './labour-people.js'
 import { classifySpend } from '../lib/spend-classification.js'
@@ -728,7 +728,14 @@ export async function createMemoryItem(jobId: string, userId: string, input: Cre
   const summary = deriveManualSummary({ ...input, labourPerson: effLabourPerson })
   if (!summary) throw { code: ErrorCode.MISSING_FIELD, message: 'summary is required' }
 
-  const happenedAt = parseHappenedAt(input.happenedAt)
+  // The day this memory is FOR. An explicit date always wins. When none is
+  // given, types whose date is read back as evidence (a bought/ordered material
+  // can appear as a dated line inside a supplier payment receipt) record today
+  // — the day Mike is sitting there adding it, which is first-hand and his own.
+  // Recorded once, here, rather than guessed later by whatever renders it.
+  const happenedAt =
+    parseHappenedAt(input.happenedAt) ??
+    (memoryTypeDefaultsToRecordedDay(memoryType) ? ukLocalNoon(ukLocalDayString(new Date())) : null)
 
   // Default currency to GBP when a cost is present but currency omitted.
   let costCurrency = effCostCurrency ?? null

@@ -3,6 +3,7 @@ import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
 import { strictParsePositive, deriveSafeMaterialTotal, deriveSafeLabourTotal, hasCostConflict } from '../lib/cost-utils.js'
 import { resolveDraftHappenedAt, ukLocalDayString, ukLocalNoon } from '../lib/dates.js'
+import { apiMemoryTypeDefaultsToRecordedDay } from '../lib/memory-types.js'
 
 function toDbFactType(ft: string): string {
   return ft.toUpperCase()
@@ -23,13 +24,24 @@ function deriveSafeTotalCost(fact: CandidateFactDraft): string | undefined {
   return derived ?? undefined
 }
 
-// Effective day for a fact. Labour always gets one: a spoken day resolved
-// against the note capture date, else the capture day itself (UK local noon).
-// Other fact types only store a day the provider actually resolved.
+// Effective day for a fact: a spoken day resolved against the note capture date
+// wins. Failing that, types whose date is read back as evidence — bought/ordered
+// material, which can appear as a dated line inside a supplier payment receipt,
+// and labour, which rolls up into day totals — fall back to the day the note was
+// captured (UK local noon).
+//
+// That capture day is Mike's own first-hand evidence: he recorded the note on a
+// real day, on the site, about what he had just done. It is recorded HERE, once,
+// at extraction time — never re-derived when a receipt is rendered, where it
+// would be a guess dressed as a fact.
+//
+// Every other fact type still stores only a day the provider actually resolved.
 function resolveHappenedAt(fact: CandidateFactDraft, noteCapturedAt: Date): Date | null {
   const resolved = resolveDraftHappenedAt(fact.happenedAt, noteCapturedAt)
   if (resolved) return resolved
-  if (fact.factType === 'labour') return ukLocalNoon(ukLocalDayString(noteCapturedAt))
+  if (apiMemoryTypeDefaultsToRecordedDay(fact.factType)) {
+    return ukLocalNoon(ukLocalDayString(noteCapturedAt))
+  }
   return null
 }
 
