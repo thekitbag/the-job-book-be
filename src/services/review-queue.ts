@@ -18,7 +18,8 @@ import {
   matchLabourPersonByName,
   normalizeLabourPerson,
 } from './labour-people.js'
-import { MEMORY_TYPES, isCategoryAssignableApiMemoryType } from '../lib/memory-types.js'
+import { MEMORY_TYPES, isCategoryAssignableApiMemoryType, apiMemoryTypeDefaultsToRecordedDay } from '../lib/memory-types.js'
+import { ukLocalNoon, ukLocalDayString } from '../lib/dates.js'
 
 type ActiveLabourPerson = Awaited<ReturnType<typeof getActiveLabourPeople>>[number]
 
@@ -572,6 +573,23 @@ export async function getReviewQueue(jobId: string, userId: string) {
 
 // ── POST /api/jobs/:jobId/review-queue-decisions ──────────────────────────────
 
+
+// The day the note behind a queue item was captured, as UK local noon. Used as
+// the recorded day for a confirmed/corrected memory whose type reads its date
+// back as evidence and whose draft carries none — typically a candidate fact
+// extracted before that default existed. It is the note's own capture day, not
+// the review day: confirming a week later must not date the purchase today.
+async function sourceNoteCaptureDay(sourceCandidateFactIds: string[]): Promise<Date | null> {
+  const factId = sourceCandidateFactIds[0]
+  if (!factId) return null
+  const fact = await prisma.candidateFact.findUnique({
+    where: { id: factId },
+    select: { sourceNote: { select: { capturedAt: true } } },
+  })
+  const capturedAt = fact?.sourceNote?.capturedAt
+  return capturedAt ? ukLocalNoon(ukLocalDayString(capturedAt)) : null
+}
+
 export async function submitQueueDecision(jobId: string, userId: string, payload: QueueDecisionPayload) {
   await verifyJobOwnership(jobId, userId)
 
@@ -610,6 +628,14 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     const budgetCategoryId = await resolveDecisionCategory(
       jobId, pm.memoryType, payload.budgetCategoryId, undefined,
     )
+
+    // The day this memory is for. The draft's day wins; when it has none and the
+    // type reads its date back as evidence, the note's capture day is recorded.
+    const confirmHappenedAt =
+      (pm.happenedAt ? new Date(pm.happenedAt) : null) ??
+      (apiMemoryTypeDefaultsToRecordedDay(pm.memoryType)
+        ? await sourceNoteCaptureDay(sourceCandidateFactIds)
+        : null)
 
     // Labour person/Budget treatment: an explicit payload choice wins, else the
     // draft's person text is matched to an active person's defaults.
@@ -657,7 +683,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           labourTask: pm.labourTask,
           labourPersonId: confirmLabour.labourPersonId,
           labourBudgetEnabled: confirmLabour.labourBudgetEnabled,
-          happenedAt: pm.happenedAt ? new Date(pm.happenedAt) : null,
+          happenedAt: confirmHappenedAt,
           unresolvedFlags,
           budgetCategoryId,
         },
@@ -700,10 +726,18 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     // The effective day: an explicit corrected value (null clears) wins; when the
     // correction doesn't mention it, the proposed draft's day is preserved so a
     // person/hours edit never silently wipes the labour day.
+    //
+    // An explicit null is a deliberate "I don't know when" and is honoured as
+    // null — only a correction that never mentions the date falls back, first to
+    // the draft's day and then, for types whose date is evidence, to the note's
+    // capture day.
     const correctedHappenedAt =
       corrected.happenedAt !== undefined
         ? (corrected.happenedAt ? new Date(corrected.happenedAt) : null)
-        : (pm.happenedAt ? new Date(pm.happenedAt) : null)
+        : ((pm.happenedAt ? new Date(pm.happenedAt) : null) ??
+           (apiMemoryTypeDefaultsToRecordedDay(corrected.memoryType.toLowerCase())
+             ? await sourceNoteCaptureDay(sourceCandidateFactIds)
+             : null))
     if (correctedHappenedAt !== null && Number.isNaN(correctedHappenedAt.getTime())) {
       throw { code: ErrorCode.INVALID_FIELD, message: 'corrected.happenedAt must be a valid ISO date/time' }
     }
