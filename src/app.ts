@@ -1,4 +1,4 @@
-import { recoverNoteWork } from './services/recover-note-work.js'
+import { startNoteRecovery } from './services/recover-note-work.js'
 import captureRoutes from './routes/capture.js'
 import jobLogRoutes from './routes/job-log.js'
 import Fastify from 'fastify'
@@ -59,14 +59,12 @@ export function buildApp(opts: AppOptions = {}) {
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
 
   if (opts.recoverOnStart) {
+    let stopRecovery: (() => Promise<void>) | undefined
     fastify.addHook('onListen', async () => {
-      try {
-        await recoverNoteWork({ storage, transcription, extraction }, (err, noteId) =>
-          fastify.log.error({ err, noteId }, 'note recovery failed'))
-      } catch (err) {
-        fastify.log.error({ err }, 'note recovery scan failed')
-      }
+      stopRecovery = startNoteRecovery({ storage, transcription, extraction }, (err, noteId) =>
+        fastify.log.error({ err, noteId }, noteId ? 'note recovery failed' : 'note recovery scan failed'))
     })
+    fastify.addHook('onClose', async () => { await stopRecovery?.() })
   }
 
   fastify.register(cors, {

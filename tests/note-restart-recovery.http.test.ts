@@ -235,3 +235,113 @@ it('recovers only eligible latest work on simultaneous startup and filing', asyn
     expect((await draft(id)).state).toBe(state)
   }
 }, 15_000)
+
+it('rechecks fresh work each minute and keeps old uploads out of recovery', async () => {
+  await Promise.all(servers.splice(0).map((server) => server.close()))
+  const now = Date.now()
+  const abandoned = await seed('abandoned-at-start', jobId, {
+    status: 'TRANSCRIBING',
+    startedAt: new Date(now - 10_000),
+  })
+  const oldFiled = await seed('old-filed', jobId, {
+    status: 'COMPLETED',
+    text: 'Six hours',
+  })
+  const oldUnfiled = await seed('old-unfiled', null, {
+    status: 'COMPLETED',
+    text: 'Six hours',
+  })
+  const oldUntranscribed = await seed('old-untranscribed', jobId)
+  const oldIds = [oldFiled, oldUnfiled, oldUntranscribed]
+  await prisma.rawNote.updateMany({
+    where: { id: { in: oldIds } },
+    data: { uploadedAt: new Date(now - 8 * 24 * 60 * 60_000) },
+  })
+
+  // Hold extraction from the retry open across the next scan tick.
+  let release: () => void = () => {}
+  extractionBarriers.set(
+    abandoned,
+    new Promise<void>((resolve) => {
+      release = resolve
+    }),
+  )
+  const query = vi.spyOn(prisma, '$queryRaw')
+  const scans = () =>
+    query.mock.calls.flatMap(([sql], index) =>
+      Array.isArray(sql) && sql[0].includes('WITH recent_notes')
+        ? [query.mock.results[index].value]
+        : [],
+    )
+  const scanCount = () => scans().length
+  async function waitForEmptyScan(count: number) {
+    await expect.poll(scanCount).toBe(count)
+    expect(await scans().at(-1)).toEqual([])
+    // Let the scheduler settle its promise before advancing to the next tick.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+  }
+
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+  vi.setSystemTime(now)
+  const app = buildApp(appOptions)
+  servers.push(app)
+  try {
+    const base = await app.listen({ host: '127.0.0.1', port: 0 })
+    const headers = { 'x-pilot-user-id': owner }
+    await waitForEmptyScan(1)
+    const transcript = (id: string) =>
+      prisma.transcript.findFirst({ where: { noteId: id } })
+    expect((await transcript(abandoned))?.status).toBe('TRANSCRIBING')
+
+    // At minute four the claim is 4m10s old. Step through each interval so
+    // the database scan finishes before the next scheduled tick.
+    for (let minute = 1; minute <= 4; minute++) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      await waitForEmptyScan(minute + 1)
+      expect((await transcript(abandoned))?.status).toBe('TRANSCRIBING')
+    }
+    await vi.advanceTimersByTimeAsync(60_000)
+    await expect
+      .poll(() => extractions.filter((id) => id === abandoned).length)
+      .toBe(1)
+    expect(transcriptions.filter((id) => id === abandoned)).toHaveLength(1)
+    expect((await transcript(abandoned))?.status).toBe('COMPLETED')
+    expect(scanCount()).toBe(6)
+
+    // A tick while the recovery provider is still in flight does not rescan.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(scanCount()).toBe(6)
+    expect((await transcript(oldFiled))?.extractionStatus).toBeNull()
+    expect(await transcript(oldUntranscribed)).toBeNull()
+    expect(extractions.some((id) => oldIds.includes(id))).toBe(false)
+
+    const file = await fetch(base + `/api/notes/${oldUnfiled}/file`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ jobId }),
+    })
+    expect(file.status).toBe(200)
+    await expect
+      .poll(async () => (await transcript(oldUnfiled))?.extractionStatus)
+      .toBe('COMPLETED')
+    expect(extractions.filter((id) => id === oldUnfiled)).toHaveLength(1)
+
+    // Close waits for the running recovery to publish, then clears the timer.
+    let closed = false
+    const closing = app.close().then(() => {
+      closed = true
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(closed).toBe(false)
+    release()
+    await closing
+    servers.pop()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(scanCount()).toBe(6)
+    expect((await transcript(abandoned))?.extractionStatus).toBe('COMPLETED')
+  } finally {
+    release()
+    vi.useRealTimers()
+    query.mockRestore()
+  }
+}, 15_000)

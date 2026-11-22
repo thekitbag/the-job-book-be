@@ -78,15 +78,18 @@ with 100 ms polling. Times in milliseconds were **3647, 2735, 2938, 4011,
 This measures a local server with the existing OpenAI adapters and synthetic
 audio, without a mobile network or time spent choosing the job.
 
-`npm test`: 1,330 passed and 20 previously skipped. The money-unset profile:
-930 passed and 54 restoration-only skips. `npm run build`, `git diff --check`
+`npm test`: 1,331 passed and 20 previously skipped. The money-unset profile:
+931 passed and 54 restoration-only skips. `npm run build`, `git diff --check`
 and `npm audit --audit-level=high` passed. The audit returned zero findings.
 
 No frontend or physical-device smoke was run for this backend branch. The
 frontend uses `moreToCheckCount`, `uncertain` and the 409 `DRAFT_CHANGED`
-response to refresh stale drafts. Workers use in-process dispatch. Server startup scans the latest transcript
-revision of each note and redispatches missing, pending and over-five-minute
-work, leaving completed, failed and fresh claims alone. A note row lock and
+response to refresh stale drafts. Workers use in-process dispatch. Recovery scans on startup and every minute,
+checking only the latest transcript revision of notes uploaded within seven days.
+It redispatches missing, pending and over-five-minute work. Completed, failed
+and fresh claims are skipped. A busy scan skips the next tick. Closing the
+server clears the timer, stops dispatching queued recovery work and waits for
+active work to finish. A note row lock and
 timestamp claims prevent duplicate calls from startup and live triggers. A
 superseded attempt cannot publish over the recovering attempt.
 
@@ -103,3 +106,11 @@ superseded attempt cannot publish over the recovering attempt.
   Completed, failed, fresh and unfiled extraction states were checked. Silent
   completed transcription also recovered without a provider call.
 - The shared-decision refusal uses the approved text.
+
+- A real database HTTP regression test used a controlled clock to track a
+  transcription claim that was ten seconds old at startup. The first five
+  scans left it alone. The scan at minute five recovered it once. A blocked
+  provider call prevented overlapping scans, and server close drained that
+  call and stopped future ticks. Notes uploaded eight days earlier were not
+  recovered in either stage. Filing an old unfiled note through HTTP still
+  started extraction.
