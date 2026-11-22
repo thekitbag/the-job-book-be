@@ -5,11 +5,15 @@ import { FakeAudioStorage } from './fakes/storage.js'
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {
+    $queryRaw: vi.fn(),
+    $transaction: async (run: (tx: unknown) => unknown) => run((await import('../src/db/client.js')).prisma),
     rawNote: {
       findUnique: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
     },
     transcript: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       create: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
     },
@@ -55,7 +59,7 @@ describe('runTranscription — success path', () => {
     )
 
     // Transcript updated to COMPLETED with text
-    expect(vi.mocked(prisma.transcript.update as any)).toHaveBeenCalledWith(
+    expect(vi.mocked(prisma.transcript.updateMany as any)).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'COMPLETED', text: FAKE_TRANSCRIPT_TEXT }),
       }),
@@ -80,7 +84,7 @@ describe('runTranscription — failure path', () => {
     await runTranscription(NOTE_ID, new FailingTranscriptionProvider(), storage)
 
     // Transcript updated to FAILED
-    expect(vi.mocked(prisma.transcript.update as any)).toHaveBeenCalledWith(
+    expect(vi.mocked(prisma.transcript.updateMany as any)).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'FAILED', errorCode: 'PROVIDER_ERROR' }),
       }),

@@ -78,13 +78,28 @@ with 100 ms polling. Times in milliseconds were **3647, 2735, 2938, 4011,
 This measures a local server with the existing OpenAI adapters and synthetic
 audio, without a mobile network or time spent choosing the job.
 
-`npm test`: 1,325 passed and 20 previously skipped. The money-unset profile:
-925 passed and 54 restoration-only skips. `npm run build`, `git diff --check`
+`npm test`: 1,330 passed and 20 previously skipped. The money-unset profile:
+930 passed and 54 restoration-only skips. `npm run build`, `git diff --check`
 and `npm audit --audit-level=high` passed. The audit returned zero findings.
 
 No frontend or physical-device smoke was run for this backend branch. The
 frontend uses `moreToCheckCount`, `uncertain` and the 409 `DRAFT_CHANGED`
-response to refresh stale drafts. Workers use the existing in-process dispatch.
-The conditional database claim prevents duplicate extraction under live races.
-A process interruption after claiming work does not gain a new restart recovery
-mechanism in this slice.
+response to refresh stale drafts. Workers use in-process dispatch. Server startup scans the latest transcript
+revision of each note and redispatches missing, pending and over-five-minute
+work, leaving completed, failed and fresh claims alone. A note row lock and
+timestamp claims prevent duplicate calls from startup and live triggers. A
+superseded attempt cannot publish over the recovering attempt.
+
+## Follow-up checks
+
+- Partial and full returns move with their source leftover and their own
+  `ADD_MISSING` decision, including when the leftover is soft removed. A refund
+  event on the Returned row alone blocked the move and left both jobs unchanged.
+- Silent uploads produced `{"state":"ready","transcriptText":"","items":[],"moreToCheckCount":0}`.
+  Extraction reached completed without a provider call.
+- Two local servers started against the same isolated PostgreSQL schema.
+  Recovery processed three missing, pending or stuck transcriptions and five
+  eligible extractions exactly once each, including a concurrent file request.
+  Completed, failed, fresh and unfiled extraction states were checked. Silent
+  completed transcription also recovered without a provider call.
+- The shared-decision refusal uses the approved text.

@@ -73,16 +73,17 @@ export async function getNoteDraft(noteId: string, userId: string) {
   const t = note.transcripts[0]
   const state = !note.jobId
     ? 'not_filed'
-    : t?.status === 'FAILED' || t?.extractionStatus === 'FAILED'
+    : t?.status === 'FAILED' ||
+        (t?.text?.trim() && t.extractionStatus === 'FAILED')
       ? 'failed'
       : t?.status !== 'COMPLETED'
         ? 'transcribing'
-        : t.extractionStatus === 'COMPLETED'
+        : !t.text?.trim() || t.extractionStatus === 'COMPLETED'
           ? 'ready'
           : 'extracting'
   const items = []
   let moreToCheckCount = 0
-  if (state === 'ready' && note.jobId) {
+  if (state === 'ready' && note.jobId && t?.text?.trim()) {
     const checks = await getNoteChecks(note.jobId, noteId)
     moreToCheckCount = checks.moreToCheckCount
     for (const item of checks.singles) {
@@ -308,21 +309,49 @@ export async function moveNote(
     ) {
       throw captureError(
         'NOTE_MOVE_BLOCKED',
-        'This note shares reviewed records with another recording and cannot be moved on its own',
+        "This note was checked together with another recording, so it can't be moved on its own.",
       )
     }
-    const decisionIds = decisions.map((d) => d.id)
-    const memory = await tx.memoryItem.findMany({
+    const decisionIds = new Set(decisions.map((d) => d.id))
+    const sources = await tx.memoryItem.findMany({
       where: {
         jobId: fromJobId,
         OR: [
           { sourceCandidateFactId: { in: factIds } },
-          { reviewDecisionId: { in: decisionIds } },
+          { reviewDecisionId: { in: [...decisionIds] } },
         ],
       },
-      select: { id: true, labourPersonId: true, budgetCategoryId: true },
+      select: { id: true },
     })
-    const memoryIds = memory.map((m) => m.id)
+    const sourceIds = sources.map((m) => m.id)
+    if (sourceIds.length) {
+      // A return updates its source leftover in the same transaction. Lock
+      // source rows before reading returns so a committed return moves too.
+      await tx.$queryRaw`
+        SELECT id FROM "memory_items" WHERE id = ANY(${sourceIds}::text[])
+          ORDER BY id FOR UPDATE
+      `
+    }
+    const memory = await tx.memoryItem.findMany({
+      where: {
+        jobId: fromJobId,
+        OR: [
+          { id: { in: sourceIds } },
+          {
+            memoryType: 'RETURNED_MATERIAL',
+            returnedFromMemoryItemId: { in: sourceIds },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        reviewDecisionId: true,
+        labourPersonId: true,
+        budgetCategoryId: true,
+      },
+    })
+    for (const item of memory) decisionIds.add(item.reviewDecisionId)
+    const memoryIds = [...new Set(memory.map((m) => m.id))]
     if (
       memory.some((m) => m.labourPersonId || m.budgetCategoryId) ||
       (await tx.jobMoneyEvent.count({
@@ -345,7 +374,7 @@ export async function moveNote(
       data: { jobId: toJobId },
     })
     await tx.reviewDecision.updateMany({
-      where: { id: { in: decisionIds } },
+      where: { id: { in: [...decisionIds] } },
       data: { jobId: toJobId },
     })
     await tx.memoryItem.updateMany({

@@ -63,7 +63,7 @@ const transcription: TranscriptionProvider = {
       await new Promise<void>((resolve) =>
         controlled.set(input.noteId, resolve),
       )
-    return { text: scenario }
+    return { text: scenario === 'silent' ? '' : scenario }
   },
 }
 const extraction: ExtractionProvider = {
@@ -195,7 +195,10 @@ async function http(
           stillToCheck: body.stillToCheck.count,
         }
       : body
-    appendFileSync(process.env.CAPTURE_WORKFLOW_EVIDENCE, JSON.stringify({ path, status: res.status, body: excerpt }) + '\n')
+    appendFileSync(
+      process.env.CAPTURE_WORKFLOW_EVIDENCE,
+      JSON.stringify({ path, status: res.status, body: excerpt }) + '\n',
+    )
   }
   return body
 }
@@ -268,7 +271,10 @@ describe('Record from Home over local HTTP and PostgreSQL', () => {
     expect(await file(note.id, foreign, 404)).toMatchObject({
       code: 'JOB_NOT_FOUND',
     })
-    for (const response of await Promise.all([file(note.id, first), file(note.id, first)])) {
+    for (const response of await Promise.all([
+      file(note.id, first),
+      file(note.id, first),
+    ])) {
       expect(response).toMatchObject({ note: { jobId: first } })
     }
     const ready = await waitReady(note.id)
@@ -489,6 +495,129 @@ describe('Record from Home over local HTTP and PostgreSQL', () => {
       await looks(a.id, [aHours.queueItemId, other.items[0].queueItemId], 400),
     ).toMatchObject({ code: 'INVALID_FIELD' })
     expect(await prisma.memoryItem.count({ where: { jobId: job } })).toBe(0)
+  })
+
+  it('makes a silent recording ready without calling extraction', async () => {
+    const { note } = await upload('silent', first)
+    expect(await waitReady(note.id)).toMatchObject({
+      transcriptText: '',
+      items: [],
+      moreToCheckCount: 0,
+    })
+    expect(calls.get(note.id)).toBeUndefined()
+    await expect
+      .poll(
+        async () =>
+          (
+            await prisma.transcript.findFirstOrThrow({
+              where: { noteId: note.id },
+            })
+          ).extractionStatus,
+      )
+      .toBe('COMPLETED')
+  })
+
+  it.each(['1', '2'])(
+    'moves a return of %s from a confirmed leftover of two and preserves both rows',
+    async (quantity) => {
+      const source = await createJob(owner, 'Return source')
+      const target = await createJob(owner, 'Return target')
+      const { note } = await upload('workflow', source)
+      const ready = await waitReady(note.id)
+      const check = ready.items.find(
+        (item: { item?: string }) => item.item === 'ply',
+      )
+      await looks(note.id, [check.queueItemId])
+      const leftover = await prisma.memoryItem.findFirstOrThrow({
+        where: { jobId: source, memoryType: 'LEFTOVER_MATERIAL' },
+      })
+      const result = await http(
+        `/api/jobs/${source}/memory-items/${leftover.id}/return`,
+        { body: { quantity }, status: 201 },
+      )
+      const returnedId = result.returnedItem.id
+      // Legacy money on the returned row alone must block the entire move.
+      const refund = await prisma.jobMoneyEvent.create({
+        data: {
+          jobId: source,
+          kind: 'REFUND',
+          direction: 'IN',
+          amount: '5',
+          occurredAt: new Date(),
+          sourceMemoryItemId: returnedId,
+        },
+      })
+      expect(await move(note.id, target, 409)).toMatchObject({
+        code: 'NOTE_MOVE_BLOCKED',
+      })
+      expect((await draft(note.id)).jobId).toBe(source)
+      expect(
+        (
+          await prisma.memoryItem.findUniqueOrThrow({
+            where: { id: returnedId },
+          })
+        ).jobId,
+      ).toBe(source)
+      expect(await prisma.itemMove.count({ where: { noteId: note.id } })).toBe(
+        0,
+      )
+      await prisma.jobMoneyEvent.delete({ where: { id: refund.id } })
+      await move(note.id, target)
+      const returned = await prisma.memoryItem.findUniqueOrThrow({
+        where: { id: returnedId },
+      })
+      expect(returned).toMatchObject({
+        jobId: target,
+        quantity,
+        returnedFromMemoryItemId: leftover.id,
+      })
+      expect(
+        await prisma.reviewDecision.findUniqueOrThrow({
+          where: { id: returned.reviewDecisionId },
+        }),
+      ).toMatchObject({
+        jobId: target,
+        action: 'ADD_MISSING',
+      })
+      expect(
+        await prisma.memoryItem.findUniqueOrThrow({
+          where: { id: leftover.id },
+        }),
+      ).toMatchObject({
+        jobId: target,
+        isRemoved: quantity === '2',
+        quantity: quantity === '2' ? '2' : '1',
+      })
+      const returnedItems = async (jobId: string) =>
+        (await http(`/api/jobs/${jobId}/memory-view`)).sections.find(
+          (section: { key: string }) => section.key === 'returned_materials',
+        ).items
+      expect(await returnedItems(source)).toEqual([])
+      expect(await returnedItems(target)).toContainEqual(
+        expect.objectContaining({ id: returnedId }),
+      )
+    },
+  )
+
+  it('explains why a note checked together with another recording cannot move', async () => {
+    const source = await createJob(owner, 'Shared decision source')
+    const { note: a } = await upload('workflow', source)
+    const { note: b } = await upload('workflow', source)
+    await waitReady(a.id)
+    await waitReady(b.id)
+    const queue = await http(`/api/jobs/${source}/review-queue`)
+    const item = queue.sections.find(
+      (section: { key: string }) => section.key === 'ordered_materials',
+    ).items[0]
+    expect(item.kind).toBe('duplicate_group')
+    await http(`/api/jobs/${source}/review-queue-decisions`, {
+      body: { action: 'confirm', queueItemId: item.id },
+    })
+    expect(await move(a.id, second, 409)).toEqual({
+      code: 'NOTE_MOVE_BLOCKED',
+      message:
+        "This note was checked together with another recording, so it can't be moved on its own.",
+    })
   })
 
   it('files and moves owner-only photos, reports Home counts, and preserves the legacy note wrapper', async () => {

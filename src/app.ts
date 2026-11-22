@@ -1,3 +1,4 @@
+import { recoverNoteWork } from './services/recover-note-work.js'
 import captureRoutes from './routes/capture.js'
 import jobLogRoutes from './routes/job-log.js'
 import Fastify from 'fastify'
@@ -41,6 +42,7 @@ export interface AppOptions {
   extraction?: ExtractionProvider
   email?: EmailProvider
   maxAudioBytes?: number
+  recoverOnStart?: boolean
 }
 
 export function buildApp(opts: AppOptions = {}) {
@@ -55,6 +57,17 @@ export function buildApp(opts: AppOptions = {}) {
   const extraction = opts.extraction ?? createExtractionProvider()
   const email = opts.email ?? createEmailProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
+
+  if (opts.recoverOnStart) {
+    fastify.addHook('onListen', async () => {
+      try {
+        await recoverNoteWork({ storage, transcription, extraction }, (err, noteId) =>
+          fastify.log.error({ err, noteId }, 'note recovery failed'))
+      } catch (err) {
+        fastify.log.error({ err }, 'note recovery scan failed')
+      }
+    })
+  }
 
   fastify.register(cors, {
     credentials: true,

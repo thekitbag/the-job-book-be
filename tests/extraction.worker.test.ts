@@ -10,6 +10,7 @@ import {
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {
+    $queryRaw: vi.fn(),
     transcript: {
       findUnique: vi.fn(),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -249,13 +250,17 @@ describe('runExtraction — guard conditions', () => {
     expect(vi.mocked(prisma.transcript.update as any)).not.toHaveBeenCalled()
   })
 
-  it('returns early when transcript text is null', async () => {
+  it('completes an empty transcript without calling the extraction provider', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
       makeTranscript({ text: null }),
     )
 
-    await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
+    const provider = new FakeExtractionProvider()
+    const extract = vi.spyOn(provider, 'extractFacts')
+    await runExtraction(TRANSCRIPT_ID, provider)
+    expect(extract).not.toHaveBeenCalled()
+    expect(prisma.transcript.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ extractionStatus: 'COMPLETED' }) }))
 
     expect(vi.mocked(prisma.candidateFact.create as any)).not.toHaveBeenCalled()
   })

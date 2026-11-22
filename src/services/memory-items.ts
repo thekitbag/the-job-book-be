@@ -497,19 +497,24 @@ export async function returnMaterial(
       // Full return: the source leftover is fully consumed. Soft-remove it (source
       // evidence preserved) with a reason distinguishing it from a plain delete.
       await tx.memoryItem.update({
-        where: { id: source.id },
+        where: { id: source.id, jobId, isRemoved: false, quantity: source.quantity },
         data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId, removedReason: 'returned' },
       })
     } else {
       // Partial return: the source leftover keeps its remaining quantity.
       remainingLeftover = await tx.memoryItem.update({
-        where: { id: source.id },
+        where: { id: source.id, jobId, isRemoved: false, quantity: source.quantity },
         data: { quantity: formatQuantity(leftoverQty - returnedQty) },
         include: FACT_INCLUDE,
       })
     }
 
     return { returnedItem, remainingLeftover }
+  }).catch((error: unknown) => {
+    if ((error as { code?: string })?.code === 'P2025') {
+      throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'The source leftover changed. Refresh and try again.' }
+    }
+    throw error
   })
 
   return {
