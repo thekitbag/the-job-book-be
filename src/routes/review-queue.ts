@@ -126,6 +126,9 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
       if (e.code === ErrorCode.JOB_NOT_FOUND) return reply.code(404).send(e)
       if (e.code === ErrorCode.FORBIDDEN) return reply.code(403).send(e)
       if (e.code === ErrorCode.QUEUE_ITEM_NOT_FOUND) return reply.code(404).send(e)
+      if (e.code === 'P2025') return reply.code(409).send({
+        code: ErrorCode.QUEUE_ITEM_ALREADY_DECIDED, message: 'This check changed. Refresh the review queue.',
+      })
       if (e.code === ErrorCode.QUEUE_ITEM_ALREADY_DECIDED) return reply.code(409).send(e)
       if (e.code === ErrorCode.QUEUE_ITEM_CONFIRM_NOT_ALLOWED) return reply.code(409).send(e)
       if (e.code === ErrorCode.BUDGET_CATEGORY_NOT_FOUND) return reply.code(404).send(e)

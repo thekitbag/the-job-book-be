@@ -40,7 +40,7 @@ async function cleanup() {
 // materialises the queue.
 async function createUnresolvedFact(summary: string, materialName: string) {
   const note = await prisma.rawNote.create({
-    data: { jobId, clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 10 },
+    data: { jobId, ownerUserId: userId, filedAt: new Date(), clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 10 },
   })
   const tx = await prisma.transcript.create({
     data: { noteId: note.id, status: 'COMPLETED', text: summary },

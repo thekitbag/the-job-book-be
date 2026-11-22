@@ -144,7 +144,7 @@ export function normalizeOriginalFileName(value: string | null | undefined): str
 
 interface JobReceiptRow {
   id: string
-  jobId: string
+  jobId: string | null
   fileKind: string
   descriptor: string | null
   originalFileName: string | null
@@ -214,6 +214,7 @@ export async function createJobReceipt(input: CreateJobReceiptInput, storage: Au
       data: {
         id: receiptId,
         jobId: input.jobId,
+        filedAt: new Date(),
         uploadedByUserId: input.userId,
         kind: 'RECEIPT',
         fileKind,

@@ -87,7 +87,7 @@ async function directAdd(body: Record<string, unknown>): Promise<string> {
 async function captureByVoice(facts: Array<Record<string, unknown>>) {
   const note = await prisma.rawNote.create({
     data: {
-      jobId,
+      jobId, ownerUserId: ownerId, filedAt: new Date(),
       clientNoteId: `note-${Math.random().toString(36).slice(2)}`,
       capturedAt: NOTE_CAPTURED_AT,
       mimeType: 'audio/webm',

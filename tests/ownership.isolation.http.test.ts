@@ -99,7 +99,7 @@ beforeAll(async () => {
 
   const note = await prisma.rawNote.create({
     data: {
-      jobId,
+      jobId, ownerUserId: userAId, filedAt: new Date(),
       clientNoteId: randomUUID(),
       capturedAt: new Date(),
       mimeType: 'audio/webm',

@@ -1,3 +1,5 @@
+import { startNoteRecovery } from './services/recover-note-work.js'
+import captureRoutes from './routes/capture.js'
 import jobLogRoutes from './routes/job-log.js'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
@@ -40,6 +42,7 @@ export interface AppOptions {
   extraction?: ExtractionProvider
   email?: EmailProvider
   maxAudioBytes?: number
+  recoverOnStart?: boolean
 }
 
 export function buildApp(opts: AppOptions = {}) {
@@ -54,6 +57,15 @@ export function buildApp(opts: AppOptions = {}) {
   const extraction = opts.extraction ?? createExtractionProvider()
   const email = opts.email ?? createEmailProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
+
+  if (opts.recoverOnStart) {
+    let stopRecovery: (() => Promise<void>) | undefined
+    fastify.addHook('onListen', async () => {
+      stopRecovery = startNoteRecovery({ storage, transcription, extraction }, (err, noteId) =>
+        fastify.log.error({ err, noteId }, noteId ? 'note recovery failed' : 'note recovery scan failed'))
+    })
+    fastify.addHook('onClose', async () => { await stopRecovery?.() })
+  }
 
   fastify.register(cors, {
     credentials: true,
@@ -84,6 +96,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)
   fastify.register(jobLogRoutes)
+  fastify.register(captureRoutes, { storage, extraction })
   fastify.register(notesRoutes, { storage, transcription, extraction })
   fastify.register(factsRoutes)
   fastify.register(reviewQueueRoutes)

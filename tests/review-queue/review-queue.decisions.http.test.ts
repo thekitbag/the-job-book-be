@@ -138,7 +138,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CONFIRMED' },
     })
   })
@@ -153,7 +153,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().sourceCandidateFactIds).toEqual([FACT_ID, FACT_ID_2])
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID, FACT_ID_2] } },
+      where: { id: { in: [FACT_ID, FACT_ID_2] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CONFIRMED' },
     })
   })
@@ -190,7 +190,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CORRECTED' },
     })
   })
@@ -241,7 +241,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().action).toBe('correct')
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID, FACT_ID_2] } },
+      where: { id: { in: [FACT_ID, FACT_ID_2] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CORRECTED' },
     })
   })
@@ -264,7 +264,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'REJECTED' },
     })
   })

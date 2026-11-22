@@ -305,7 +305,7 @@ beforeAll(async () => {
   note = (
     await prisma.rawNote.create({
       data: {
-        jobId: job,
+        jobId: job, ownerUserId: owner, filedAt: new Date(),
         clientNoteId: randomUUID(),
         capturedAt: new Date('2026-07-08T09:00:00Z'),
         mimeType: 'audio/webm',
@@ -741,7 +741,7 @@ describe('job memory strip-back: real database and HTTP contract', () => {
   it('lists pending, failed, latest completed, typed notes and photos/receipts once, with ownership checks', async () => {
     const pending = await prisma.rawNote.create({
       data: {
-        jobId: job,
+        jobId: job, ownerUserId: owner, filedAt: new Date(),
         clientNoteId: randomUUID(),
         capturedAt: new Date('2026-07-09'),
         mimeType: 'audio/webm',
@@ -750,7 +750,7 @@ describe('job memory strip-back: real database and HTTP contract', () => {
     })
     const failed = await prisma.rawNote.create({
       data: {
-        jobId: job,
+        jobId: job, ownerUserId: owner, filedAt: new Date(),
         clientNoteId: randomUUID(),
         capturedAt: new Date('2026-07-10'),
         mimeType: 'audio/webm',
@@ -970,7 +970,7 @@ describe('job memory strip-back: real database and HTTP contract', () => {
     for (const [index, text] of texts.entries()) {
       const n = await prisma.rawNote.create({
         data: {
-          jobId: job,
+          jobId: job, ownerUserId: owner, filedAt: new Date(),
           clientNoteId: randomUUID(),
           capturedAt: new Date('2026-07-11'),
           mimeType: 'audio/webm',
