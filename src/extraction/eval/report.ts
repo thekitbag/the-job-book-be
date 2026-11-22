@@ -14,7 +14,7 @@ function statusIcon(s: string): string {
   return '❌'
 }
 
-function fmtField(v: string | undefined): string {
+function fmtField(v: string | null | undefined): string {
   return v == null ? '_(not set)_' : `\`${v}\``
 }
 
@@ -47,6 +47,33 @@ export function generateMarkdownReport(
   lines.push(`| ⚠️ needs_review | ${needsReview} |`)
   lines.push(`| ❌ fail | ${fail} |`)
   lines.push(`| **Total** | **${total}** |`)
+  lines.push('')
+
+  lines.push('| Field | Correct | Expected |', '|---|---:|---:|')
+  for (const field of ['materialName', 'quantity', 'supplierName', 'labourHours', 'labourPerson'] as const) {
+    let expected = 0; let correct = 0
+    for (const r of results) for (const c of r.factComparisons) {
+      if (r.fixture.expected[c.expectedIndex][field] === undefined) continue
+      expected++
+      if (c.actualIndex !== null && c.status !== 'type_mismatch' && !c.fieldDiffs.some(d => d.field === field)) correct++
+    }
+    lines.push(`| ${field} | ${correct} | ${expected} |`)
+  }
+  lines.push('')
+
+  lines.push('Non-money field retention (only fact types retained by the new schema; removed note types are intentionally excluded):', '')
+  lines.push('| Retained field | Correct | Expected |', '|---|---:|---:|')
+  const retained = new Set(['ordered_material', 'used_material', 'leftover_material', 'returned_material', 'labour', 'unclear'])
+  for (const field of ['materialName', 'quantity', 'supplierName', 'labourHours', 'labourPerson'] as const) {
+    let expected = 0; let correct = 0
+    for (const r of results) for (const c of r.factComparisons) {
+      const fact = r.fixture.expected[c.expectedIndex]
+      if (!retained.has(fact.factType) || fact[field] === undefined) continue
+      expected++
+      if (c.actualIndex !== null && c.status !== 'type_mismatch' && !c.fieldDiffs.some(d => d.field === field)) correct++
+    }
+    lines.push(`| ${field} | ${correct} | ${expected} |`)
+  }
   lines.push('')
 
   // ── per-fixture ────────────────────────────────────────────────────────────
@@ -91,6 +118,10 @@ export function generateMarkdownReport(
       lines.push('---')
       lines.push('')
       continue
+    }
+
+    if (fixture.allowEmpty && actual.length === 0) {
+      lines.push('_An empty result is an explicitly allowed safe alternative for this vague note._', '')
     }
 
     // Fact comparisons

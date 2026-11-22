@@ -2,6 +2,7 @@ export type FactType =
   | 'ordered_material'
   | 'used_material'
   | 'leftover_material'
+  | 'returned_material'
   | 'supplier_delivery_note'
   | 'customer_change'
   | 'watch_out'
@@ -27,7 +28,7 @@ export interface CandidateFactDraft {
   costQualifier?: CostQualifier
   totalCostAmount?: string
   labourHours?: string
-  labourPerson?: string
+  labourPerson?: string | null
   labourTask?: string
   // Effective day the fact happened: resolved YYYY-MM-DD, full ISO datetime,
   // or a relative "today"/"yesterday" token; the worker resolves it against

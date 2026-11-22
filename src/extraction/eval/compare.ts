@@ -19,7 +19,7 @@ function normalise(s: string | undefined | null): string {
   return v
 }
 
-function fieldsMatch(expected: string | undefined, actual: string | undefined): boolean {
+function fieldsMatch(expected: string | null | undefined, actual: string | null | undefined): boolean {
   if (expected === undefined) return true  // not specified in expected → skip
   return normalise(expected) === normalise(actual)
 }
@@ -28,8 +28,8 @@ function fieldsMatch(expected: string | undefined, actual: string | undefined): 
 
 export interface FieldDiff {
   field: string
-  expected: string | undefined
-  actual: string | undefined
+  expected: string | null | undefined
+  actual: string | null | undefined
 }
 
 export type FactMatchStatus = 'matched' | 'field_mismatch' | 'type_mismatch' | 'missing'
@@ -56,7 +56,7 @@ export interface FixtureComparison {
 // ── core comparison ───────────────────────────────────────────────────────────
 
 const COMPARED_FIELDS: Array<keyof ExpectedFact & keyof CandidateFactDraft> = [
-  'materialName', 'quantity', 'unit', 'supplierName', 'deliveryTiming', 'locationOrUse', 'confidenceLabel',
+  'labourHours', 'labourPerson', 'materialName', 'quantity', 'unit', 'supplierName', 'deliveryTiming', 'locationOrUse', 'confidenceLabel',
 ]
 
 function compareFactToExpected(
@@ -99,6 +99,10 @@ export function compareFixture(
       inventedFacts: [],
       providerError,
     }
+  }
+
+  if (fixture.allowEmpty && actual.length === 0) {
+    return { fixture, actual, status: 'pass', factComparisons: [], inventedFacts: [] }
   }
 
   const matchedActualIndices = new Set<number>()

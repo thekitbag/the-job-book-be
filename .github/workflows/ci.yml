@@ -60,3 +60,46 @@ jobs:
 
       - name: Security audit
         run: npm audit --audit-level=high
+
+  job-memory:
+    name: Non-money tests (gate unset)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run db:generate
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - run: npm run db:migrate:deploy
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      - name: Run non-money suites with MONEY_FEATURES_ENABLED absent
+        run: env -u MONEY_FEATURES_ENABLED npm run test:job-memory -- --reporter=default --reporter=json --outputFile=reports/test/job-memory.json
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          LOG_LEVEL: error
+      - name: Save per-test results, including any failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-memory-test-results
+          path: reports/test/job-memory.json
+          if-no-files-found: warn

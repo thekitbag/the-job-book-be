@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { runExtraction } from '../src/extraction/worker.js'
 import {
@@ -352,7 +353,7 @@ describe('runExtraction — pilot correction guard', () => {
 
 // ── cost fields ───────────────────────────────────────────────────────────────
 
-describe('runExtraction — cost field persistence and safe total derivation', () => {
+describe.runIf(moneyEnabled)('runExtraction — cost field persistence and safe total derivation', () => {
   it('persists cost fields and derives total from 8 × £5 each', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
@@ -709,7 +710,7 @@ describe('runExtraction — labour facts', () => {
     return call
   }
 
-  it('persists labour fields and leaves cost null for hours-only labour', async () => {
+  it('persists hours-only labour without writing cost columns', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
@@ -719,7 +720,7 @@ describe('runExtraction — labour facts', () => {
     expect(d.labourHours).toBe('6')
     expect(d.labourTask).toBe('fitting cladding')
     expect(d.labourPerson).toBeNull()
-    expect(d.totalCostAmount).toBeNull()
+    expect(d).not.toHaveProperty('totalCostAmount')
   })
 
   it('keeps a mixed hours-and-cost recording as one LABOUR fact', async () => {
@@ -732,20 +733,17 @@ describe('runExtraction — labour facts', () => {
     expect(hours.factType).toBe('LABOUR')
     expect(hours.labourHours).toBe('8')
     expect(hours.labourPerson).toBe('Tom')
-    expect(hours.totalCostAmount).toBe('280')
-    expect(hours.costAmount).toBe('35')
+    expect(hours).not.toHaveProperty('totalCostAmount')
+    expect(hours).not.toHaveProperty('costAmount')
   })
 
-  it('records a labour cost with no hours as a LABOUR fact', async () => {
+  it('does not emit a labour cost with no hours from the memory-only fake', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
     const d = dataFor(prisma, 'Labour on the roof')
-    expect(d.factType).toBe('LABOUR')
-    expect(d.costQualifier).toBe('total')
-    expect(d.totalCostAmount).toBe('600')
-    expect(d.labourHours).toBeNull()
+    expect(d).toBeUndefined()
   })
 })
 
@@ -803,7 +801,7 @@ describe('runExtraction — labour happenedAt (effective day)', () => {
 
     const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
     expect(data.happenedAt?.toISOString()).toBe('2026-07-07T11:00:00.000Z')
-    expect(data.totalCostAmount).toBe('280')
+    expect(data.totalCostAmount).toBe(moneyEnabled ? '280' : undefined)
   })
 
   it('resolves a provider date-only happenedAt to UK local noon of that day', async () => {
@@ -891,12 +889,12 @@ describe('runExtraction — safe material total derivation', () => {
       .map((c: any) => c[0].data).find((d: any) => d.summary.includes(needle))
   }
 
-  it('derives a line total for clear quantity × each unit cost with unit and currency', async () => {
+  it('keeps materials without deriving a cost in the new schema', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(makeTranscript())
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
-    // fake fixture: 8 bags of hardcore at £5 each
-    expect(dataFor(prisma, 'hardcore').totalCostAmount).toBe('40')
+    expect(dataFor(prisma, 'hardcore').quantity).toBe('8')
+    expect(dataFor(prisma, 'hardcore')).not.toHaveProperty('totalCostAmount')
   })
 
   it('does not derive a total when the unit is missing', async () => {
@@ -909,7 +907,7 @@ describe('runExtraction — safe material total derivation', () => {
       confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
     }))
     const { prisma: p2 } = await import('../src/db/client.js')
-    expect(vi.mocked(p2.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+    expect(vi.mocked(p2.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 
   it('does not derive a total when the currency is missing', async () => {
@@ -921,6 +919,6 @@ describe('runExtraction — safe material total derivation', () => {
       costAmount: '20', costCurrency: null, costQualifier: 'each',
       confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
     }))
-    expect(vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+    expect(vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 })

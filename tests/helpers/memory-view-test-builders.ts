@@ -23,8 +23,9 @@ export const AUTH_HEADERS = { 'x-pilot-user-id': USER_ID }
 // mock callback so vi.fn instances are created per test file.
 export function createMemoryViewPrismaMock() {
   return {
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Pilot' }) },
     job: { findUnique: vi.fn() },
+    labourPerson: { findMany: vi.fn().mockResolvedValue([]) },
     memoryItem: { findMany: vi.fn() },
     candidateFact: { findMany: vi.fn() },
     queueItem: {

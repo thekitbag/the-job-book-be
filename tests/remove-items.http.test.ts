@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 // Correct/remove job items: confirmed memory items are soft-removed from the
 // active job record (never hard-deleted, source evidence preserved), all
 // active reads exclude removed rows, and used ↔ leftover moves reclassify
@@ -17,7 +18,7 @@ const PHOTO_ID = 'rm-photo-1'
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Pilot' }) },
     job: { findUnique: vi.fn() },
     memoryItem: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
     candidateFact: { findMany: vi.fn(), deleteMany: vi.fn() },
@@ -145,7 +146,7 @@ describe('active reads exclude removed memory items', () => {
     expect(where).toMatchObject({ jobId: JOB_ID, isRemoved: false })
   })
 
-  it('budget-summary queries only non-removed items', async () => {
+  it.runIf(moneyEnabled)('budget-summary queries only non-removed items', async () => {
     const { prisma } = await import('../src/db/client.js')
     const res = await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/budget-summary`, headers: authHeaders })
     expect(res.statusCode).toBe(200)
@@ -172,6 +173,11 @@ describe('active reads exclude removed memory items', () => {
       }),
     ])
     const view = (await app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/memory-view`, headers: authHeaders })).json()
+    if (!moneyEnabled) {
+      expect(view).not.toHaveProperty('costSummary')
+      expect(view.hours.totalHours).toBe('8')
+      return
+    }
     expect(view.costSummary.orderedMaterials.knownSpendAmount).toBeNull()
     expect(view.costSummary.labour.knownSpendAmount).toBe('280')
     expect(view.costSummary.totalKnownCost.knownSpendAmount).toBe('280')
@@ -212,7 +218,7 @@ describe('PATCH on removed items and used ↔ leftover moves', () => {
     expect(res.statusCode).toBe(200)
     const data = vi.mocked((prisma.memoryItem as any).update).mock.calls[0][0].data
     expect(data.memoryType).toBe('USED_MATERIAL')
-    expect(data.budgetCategoryId).toBeNull() // used material must not carry a category
+    expect(data.budgetCategoryId).toBe(moneyEnabled ? null : undefined) // money-off edits never write historical links
   })
 })
 

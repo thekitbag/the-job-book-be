@@ -1,3 +1,4 @@
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // GET /api/jobs/:jobId/review-queue — queue generation and read shape:
 // sections, grouping (duplicates/contradictions/unclear), time labels,
 // alreadyRemembered, stable item IDs, auth failures.
@@ -46,7 +47,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     const body = res.json()
     expect(body.jobId).toBe(JOB_ID)
     expect(body.generatedAt).toBeDefined()
-    expect(body.sections).toHaveLength(9)
+    expect(body.sections).toHaveLength(moneyEnabled ? 9 : 6)
     const totalItems = body.sections.reduce((n: number, s: any) => n + s.items.length, 0)
     expect(totalItems).toBe(0)
     expect(body.alreadyRemembered).toEqual([])
@@ -92,7 +93,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(res.statusCode).toBe(200)
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
     expect(item.kind).toBe('duplicate_group')
-    expect(item.reviewLabel).toBe('Looks like the same item')
+    expect(item.reviewLabel).toBe(moneyEnabled ? 'Looks like the same item' : 'OSB, 6 boards, back wall')
     expect(item.sourceCandidateFactIds).toEqual([FACT_ID, FACT_ID_2])
   })
 
@@ -106,12 +107,12 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
 
     const item = res.json().sections.find((s: any) => s.key === 'used_materials').items[0]
     expect(item.kind).toBe('contradiction')
-    expect(item.reviewLabel).toBe('Worth checking')
+    expect(item.reviewLabel).toBe(moneyEnabled ? 'Worth checking' : 'OSB, 12 boards, back wall')
   })
 
   it('places UNCLEAR fact in unclear_items section as unclear_prompt', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
-      makeFact({ factType: 'UNCLEAR', materialName: null, quantity: null }),
+      makeFact({ factType: 'UNCLEAR', materialName: null, quantity: null, unit: null, locationOrUse: null }),
     ])
 
     const res = await getQueue()
@@ -158,7 +159,7 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(body.alreadyRemembered).toHaveLength(1)
     expect(body.alreadyRemembered[0]).toMatchObject({
       memoryItemId: MEMORY_ID,
-      summary: 'Used OSB boards on the back wall',
+      summary: moneyEnabled ? 'Used OSB boards on the back wall' : 'OSB, 6 boards, back wall',
       memoryType: 'used_material',
     })
     expect(body.alreadyRemembered[0].timeLabel).toBeDefined()
@@ -183,12 +184,12 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     expect(item.quantity).toBe('6')
     expect(item.unit).toBe('boards')
     expect(item.locationOrUse).toBe('back wall')
-    expect(item.costAmount).toBe('5')
-    expect(item.costCurrency).toBe('GBP')
-    expect(item.costQualifier).toBe('each')
-    expect(item.totalCostAmount).toBe('30')
-    expect(item.uncertaintyFlags).toEqual(['cost_uncertain'])
-    expect(item.sourceUncertaintyFlags).toEqual(['cost_uncertain'])
+    expect(item.costAmount).toBe(moneyEnabled ? '5' : undefined)
+    expect(item.costCurrency).toBe(moneyEnabled ? 'GBP' : undefined)
+    expect(item.costQualifier).toBe(moneyEnabled ? 'each' : undefined)
+    expect(item.totalCostAmount).toBe(moneyEnabled ? '30' : undefined)
+    expect(item.uncertaintyFlags).toEqual(moneyEnabled ? ['cost_uncertain'] : [])
+    expect(item.sourceUncertaintyFlags).toEqual(moneyEnabled ? ['cost_uncertain'] : [])
   })
 
   it('alreadyRemembered uncertaintyFlags comes from unresolvedFlags (not sourceFact)', async () => {
@@ -217,8 +218,8 @@ describe('GET /api/jobs/:jobId/review-queue', () => {
     const res = await getQueue()
 
     const item = res.json().alreadyRemembered[0]
-    expect(item.unitCostLabel).toBe('£5 each')
-    expect(item.lineTotalLabel).toBe('£40 total')
+    expect(item.unitCostLabel).toBe(moneyEnabled ? '£5 each' : undefined)
+    expect(item.lineTotalLabel).toBe(moneyEnabled ? '£40 total' : undefined)
   })
 
   it('item ID is stable: consecutive GETs derive the same deterministic ID', async () => {

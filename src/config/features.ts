@@ -16,6 +16,10 @@ function enabled(value: string | undefined): boolean {
   return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on'
 }
 
+export function isMoneyFeaturesEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return enabled(env.MONEY_FEATURES_ENABLED)
+}
+
 // Supplier account settlement (aggregate cross-job supplier payments).
 // Default OFF. Gates the settlement WRITE routes only — recording a payment,
 // changing its date, undoing it. Reads stay available so an already-recorded

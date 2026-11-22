@@ -1,58 +1,40 @@
 import type { CandidateFactDraft, ExtractionInput, ExtractionProvider, ExtractionResult } from './types.js'
 import { PILOT_DOMAIN_CONTEXT } from './pilot-domain-context.js'
 
-const SCHEMA_VERSION = 'v2'
+export const EXTRACTION_SCHEMA_VERSION = 'v3-job-memory'
+const SCHEMA_VERSION = EXTRACTION_SCHEMA_VERSION
 const MODEL = 'gpt-4o'
 
-const BASE_PROMPT = `You are a job-memory extraction assistant for a UK building contractor.
-Extract structured facts from the transcript of a voice note recorded on site.
-
-Return a JSON object with a single key "facts" whose value is an array of candidate fact objects. Each fact object must have exactly these fields:
-- factType: one of: ordered_material | used_material | leftover_material | supplier_delivery_note | customer_change | watch_out | labour | unclear
-- summary: plain English summary (one sentence)
-- materialName: string or null
-- quantity: string or null (e.g. "12", "about 3", "half a bag")
-- unit: string or null (e.g. "sheets", "packs", "metres")
-- supplierName: string or null
-- deliveryTiming: string or null
-- locationOrUse: string or null (where material was used or delivered to)
-- costAmount: string or null (stated cost value as decimal string without currency symbol, e.g. "5", "5.50", "40")
-- costCurrency: string or null ("GBP" when pounds, £, or quid is used; null if unclear)
-- costQualifier: "each" | "total" | "approx" | "unknown" | "per_hour" | null ("each" for per-unit cost, "total" for overall cost, "per_hour" for an hourly labour rate, "approx" for uncertain cost)
-- totalCostAmount: string or null (stated or safely derivable total cost as decimal string; only set when total is explicit, quantity × unit-cost is unambiguous, or labour hours × hourly rate is unambiguous)
-- labourHours: string or null (decimal hours worked for a labour fact, e.g. "6", "8", "3.5"; null otherwise. If hours cannot be safely converted, e.g. "half a day", leave null and keep the phrase in summary/labourTask)
-- labourPerson: string or null (person, crew, or role for a labour fact, e.g. "Tom", "two of us", "electrician")
-- labourTask: string or null (work area or task for a labour fact, e.g. "fitting cladding", "electrics")
-- happenedAt: string or null (the day the fact happened, as YYYY-MM-DD. The user message states the date the note was recorded — resolve spoken day words against it: "today" is the recorded date, "yesterday" is the day before, and an explicit date like "Monday the 6th" is the matching calendar date. null when no day or date is spoken. Never guess a day from vague language like "last week".)
-- confidenceLabel: "high" | "medium" | "low"
-- confidenceReason: short explanation of why this confidence level was chosen
-- uncertaintyFlags: array of strings, e.g. ["approximate_quantity", "supplier_uncertain", "material_uncertain", "date_uncertain", "cost_uncertain"]
+const BASE_PROMPT = `You extract job memory from a UK builder's site voice note.
+Return only a JSON object {"facts": [...]}. Every candidate fact has these fields:
+- factType: ordered_material | used_material | leftover_material | returned_material | labour | unclear
+- summary: one plain English sentence about memory only, with no prices, currency or money
+- materialName, quantity, unit, supplierName, deliveryTiming, locationOrUse: string or null
+- labourHours: decimal hours as a string or null
+- labourPerson: named person, crew or role as a string, or null
+- labourTask: task or work area as a string or null
+- happenedAt: YYYY-MM-DD or null; resolve today/yesterday/explicit dates against the recorded date in the user message. Never guess vague dates.
+- confidenceLabel: high | medium | low
+- confidenceReason: short reason
+- uncertaintyFlags: string array
 
 Rules:
-- Split mixed content into separate facts — one object per distinct item
-- Use factType "unclear" for ambiguous statements where the fact type cannot be determined
-- Use low confidence and add uncertaintyFlags for approximate language: "probably", "about", "I think", "maybe", "roughly"
-- Do not infer quantities, suppliers, dates, or other details not stated in the transcript
-- For cost: only extract costAmount when a price is clearly stated; add "cost_uncertain" when cost language is approximate or ambiguous
-- Do not store money as floating point — use decimal strings (e.g. "5.50" not 5.5)
-
-Labour:
-- Use factType "labour" for time worked, e.g. "spent six hours fitting the cladding", "Tom did eight hours on electrics", "labour on the roof came to £600". Never classify labour as ordered_material.
-- Put hours in labourHours, the task/area in labourTask, and the person/crew/role in labourPerson — do not put labour hours in quantity/unit.
-- For an hourly rate use costQualifier "per_hour" with costAmount as the rate; set totalCostAmount only when hours × rate is unambiguous.
-- For a stated total labour cost use costQualifier "total" with costAmount/totalCostAmount as the total.
-- Labour with no rate or total is still a valid labour fact — leave cost fields null.
-- When several people are mentioned, emit one labour fact per person — never a merged summary fact. "Mike 4 hours, Kurt 6" is two labour facts: Mike with labourHours "4" and Kurt with labourHours "6".
-- A spoken day for labour ("yesterday", "on Monday") goes in happenedAt resolved against the recorded date; leave happenedAt null when no day is said.
-
-Examples:
-- "Spent six hours fitting the cladding today." -> { "factType": "labour", "summary": "Spent 6 hours fitting the cladding", "labourHours": "6", "labourTask": "fitting cladding", "labourPerson": null, "happenedAt": <the recorded date>, "costAmount": null, "costCurrency": null, "costQualifier": null, "totalCostAmount": null }
-- "Tom did eight hours on electrics yesterday at £35 an hour." -> { "factType": "labour", "summary": "Tom did 8 hours on electrics at £35 an hour", "labourHours": "8", "labourTask": "electrics", "labourPerson": "Tom", "happenedAt": <the day before the recorded date>, "costAmount": "35", "costCurrency": "GBP", "costQualifier": "per_hour", "totalCostAmount": "280" }
-- "Labour on the roof came to £600." -> { "factType": "labour", "summary": "Labour on the roof came to £600", "labourHours": null, "labourTask": "roof", "labourPerson": null, "happenedAt": null, "costAmount": "600", "costCurrency": "GBP", "costQualifier": "total", "totalCostAmount": "600" }
-- "Mike 4 hours, Kurt 6." -> two facts: { "factType": "labour", "summary": "Mike worked 4 hours", "labourPerson": "Mike", "labourHours": "4", "labourTask": null, "happenedAt": null } and { "factType": "labour", "summary": "Kurt worked 6 hours", "labourPerson": "Kurt", "labourHours": "6", "labourTask": null, "happenedAt": null }
-
-- Return { "facts": [] } if the transcript contains no site-relevant job facts
-- Return only a valid JSON object with the "facts" key, no surrounding text or markdown`
+- Extract only materials, hours and unclear memory. Do not emit budget_cost, supplier_delivery_note, customer_change, watch_out or general_note facts. The recording itself is the note.
+- Never extract a price, rate, cost field, refund or payment, including in summaries. A price-only note like "Skip hire, two fifty" returns {"facts":[]}.
+- "10 sheets of OSB from Jewson, £240" gives exactly one ordered_material: materialName OSB, quantity "10", unit "sheets", supplierName Jewson; no price in any field.
+- For a plain count or measurement put only the number as a decimal string in quantity and the unit separately: "two metres" means quantity "2", unit "metres"; "three packs" means quantity "3", unit "packs".
+- Words like "probably" or "I think" belong in uncertaintyFlags (approximate_quantity) and low confidence, not in quantity.
+- For a fraction or rough amount, quantity retains the whole rough phrase, for example "half a bag" (unit "bags"), "one and a bit" or "about half a pallet". Never shorten "half a bag" to "half".
+- Preserve rough quantities ("about half a pallet", "one and a bit"). Never force false precision. Add appropriate uncertainty flags and use low confidence for uncertainty.
+- Do not infer missing quantities, suppliers, people or dates. If meaning is unclear, use unclear rather than guessing.
+- Split distinct material observations. Bought or collected materials use ordered_material. Materials sent back use returned_material.
+- For labour emit one fact per person and day: "Mike 6, Kurt 4" means Mike labourHours "6" and Kurt labourHours "4", never one combined entry.
+- "Me seven hours", "I did six" and hours without a person set labourPerson to null. Never guess the account name.
+- Labour hours belong in labourHours, never quantity/unit. Do not infer hours from "half a day"; keep the phrase in labourTask with an uncertainty flag.
+- "Picked up ten sheets of OSB from Jewson, two hundred and forty quid. Me seven hours, Kurt six." gives three facts: OSB 10 sheets from Jewson, null person 7 hours, Kurt 6 hours.
+- Keep material memory even inside an instruction, delivery or change. "Use the spare cladding from the workshop before ordering more" gives leftover_material, materialName "cladding", locationOrUse "workshop". "Cancel the order for the extra OSB; we found enough in the workshop" keeps the leftover_material OSB in the workshop, without a separate change fact. "Travis Perkins dropped the hardcore at the front gate" is material memory (ordered_material), not a note fact.
+- Transcript words about deliveries, changes or warnings are kept in the recording, not separate note facts.
+- Return {"facts":[]} for content with no materials, hours or unclear job memory.`
 
 export const SYSTEM_PROMPT = `${BASE_PROMPT}\n\n${PILOT_DOMAIN_CONTEXT}`
 
