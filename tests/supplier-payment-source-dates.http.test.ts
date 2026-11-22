@@ -228,6 +228,9 @@ beforeEach(async () => {
   timberSeptId = await addItem(jobAId, purchase({ materialName: 'Timber', amount: '300', happenedAt: '2026-07-09' }))
   plasterboardId = await addItem(jobBId, purchase({ materialName: 'Plasterboard', amount: '120', happenedAt: '2026-06-30' }))
   undatedId = await addItem(jobBId, purchase({ materialName: 'Fixings', amount: '45', happenedAt: null }))
+  // This case represents a legacy undated row. New manual purchases now default
+  // to the recorded day; seed the historical gap explicitly.
+  await prisma.memoryItem.update({ where: { id: undatedId }, data: { happenedAt: null } })
 
   sydenhamsGroupId = (await bookMoney()).toPayOnAccounts.supplierGroups.find(
     (g: { displayName: string }) => g.displayName === SUPPLIER,

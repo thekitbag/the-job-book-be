@@ -50,13 +50,7 @@ or materialName null, or use factType "unclear" rather than inventing a known gl
 "Jason" is a common UK person name. Do NOT correct "Jason" to "Jewson".
 Do not turn person names, customer names, or neighbour names into supplier names.
 
-### Cost extraction
+### Memory only
 
-When a voice note mentions a price, preserve it as structured cost fields:
-- "£5 each" or "five pound each" → costAmount: "5", costCurrency: "GBP", costQualifier: "each"
-- "for £40" or "forty quid total" → costAmount: "40", costCurrency: "GBP", costQualifier: "total"
-- "about £40" or "forty-odd quid" → costAmount: "40", costCurrency: "GBP", costQualifier: "approx", add "cost_uncertain" to uncertaintyFlags
-- If price is mentioned but you cannot tell if it is per-unit or total → costQualifier: "unknown", add "cost_uncertain"
-
-Do not invent costs not mentioned in the transcript.
-This is memory, not accounting. Do not add tax, VAT, or procurement fields.`.trimStart()
+Mentioned prices stay in the transcript only. Never put currency, rates or amounts
+of money in a fact or summary. Keep material quantities, suppliers and hours.`.trimStart()

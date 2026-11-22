@@ -2,6 +2,8 @@ import type { FactType, ConfidenceLabel } from '../types.js'
 
 export interface ExpectedFact {
   factType: FactType
+  labourHours?: string
+  labourPerson?: string | null
   materialName?: string
   quantity?: string
   unit?: string
@@ -534,3 +536,10 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     notes: 'Instruction implies spare cladding exists in workshop. No quantity stated — must not invent one. Do not create an ordered_material fact for the implied future order.',
   },
 ]
+
+GOLDEN_FIXTURES.push(
+  { id: 'memory-price-001', title: 'Price laden purchase and two people', transcriptText: 'Picked up ten sheets of OSB from Jewson, two hundred and forty quid. Me seven hours, Kurt six.', jobContext: { title: 'Garden room', jobType: 'garden_room' }, tags: ['price', 'labour'], expected: [{ factType: 'ordered_material', materialName: 'OSB', quantity: '10', unit: 'sheets', supplierName: 'Jewson' }, { factType: 'labour', labourHours: '7', labourPerson: null }, { factType: 'labour', labourHours: '6', labourPerson: 'Kurt' }], notes: 'No money in facts; first person resolves at display time.' },
+  { id: 'memory-people-001', title: 'Several people with rates', transcriptText: 'Mike six hours, Kurt four hours and Tom three hours on the roof, at thirty five pounds an hour.', jobContext: { title: 'Garden room', jobType: 'garden_room' }, tags: ['price', 'labour'], expected: [{ factType: 'labour', labourPerson: 'Mike', labourHours: '6' }, { factType: 'labour', labourPerson: 'Kurt', labourHours: '4' }, { factType: 'labour', labourPerson: 'Tom', labourHours: '3' }], notes: 'One entry per person.' },
+  { id: 'memory-first-person-001', title: 'First person hours', transcriptText: 'I did six hours fitting cladding today.', jobContext: { title: 'Garden room', jobType: 'garden_room' }, tags: ['labour'], expected: [{ factType: 'labour', labourHours: '6', labourPerson: null }], notes: 'No guessed person name.' },
+  { id: 'memory-price-only-001', title: 'Cost only note stays in log', transcriptText: 'Skip hire, two fifty.', jobContext: { title: 'Garden room', jobType: 'garden_room' }, tags: ['price'], expected: [], notes: 'Recording is the note. No queue fact.' },
+)

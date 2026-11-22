@@ -1,3 +1,4 @@
+import { isMoneyFeaturesEnabled } from '../config/features.js'
 import type { FastifyPluginAsync } from 'fastify'
 import type { FastifyReply } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
@@ -124,12 +125,12 @@ const memoryItemsRoutes: FastifyPluginAsync = async (fastify) => {
     // A light change carries no memoryType and updates only the budget category
     // and/or the labour person link / Budget treatment, leaving other memory
     // fields untouched.
-    if (body.memoryType == null) {
+    if (isMoneyFeaturesEnabled() && body.memoryType == null) {
       if (!('budgetCategoryId' in body) && !('labourPersonId' in body)) {
         return reply.code(400).send({ code: ErrorCode.MISSING_FIELD, message: 'memoryType, budgetCategoryId, or labourPersonId is required' })
       }
     } else {
-      const typeError = validateMemoryTargetType(body.memoryType)
+      const typeError = body.memoryType == null ? null : validateMemoryTargetType(body.memoryType)
       if (typeError) return sendError(reply, typeError)
     }
     // Field order matches the original checks so the first-reported error for

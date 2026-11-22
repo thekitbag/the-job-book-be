@@ -1,3 +1,5 @@
+import { isMoneyFeaturesEnabled } from '../config/features.js'
+import { QUEUE_MEMORY_TYPES, ignoreMoneyInput, stripMoneyPhrase } from '../lib/job-memory.js'
 import { prisma } from '../db/client.js'
 import type { CandidateFactDraft, ExtractionProvider } from './types.js'
 import { applyPilotCorrectionGuard } from './pilot-correction-guard.js'
@@ -98,7 +100,9 @@ export async function runExtraction(
         title: transcript.note.job.title,
         jobType: transcript.note.job.jobType,
       },
-      facts: result.facts,
+      facts: result.schemaVersion === 'v3-job-memory' || !isMoneyFeaturesEnabled()
+        ? result.facts.filter(f => QUEUE_MEMORY_TYPES.has(f.factType.toUpperCase()) && (f.factType !== 'labour' || f.labourHours != null)).map(f => ({ ...ignoreMoneyInput(f), summary: stripMoneyPhrase(f.summary), labourPerson: /^(me|i|myself)$/i.test(f.labourPerson?.trim() ?? '') ? null : f.labourPerson }))
+        : result.facts,
     })
 
     await prisma.$transaction(async (tx) => {
@@ -121,10 +125,12 @@ export async function runExtraction(
             supplierName: fact.supplierName ?? null,
             deliveryTiming: fact.deliveryTiming ?? null,
             locationOrUse: fact.locationOrUse ?? null,
+            ...(result.schemaVersion !== 'v3-job-memory' && isMoneyFeaturesEnabled() ? {
             costAmount: fact.costAmount ?? null,
             costCurrency: fact.costCurrency ?? null,
             costQualifier: fact.costQualifier ?? null,
             totalCostAmount: deriveSafeTotalCost(fact) ?? null,
+            } : {}),
             labourHours: fact.labourHours ?? null,
             labourPerson: fact.labourPerson ?? null,
             labourTask: fact.labourTask ?? null,

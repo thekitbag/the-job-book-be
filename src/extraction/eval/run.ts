@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
   let provider: ExtractionProvider
   let model: string
-  const schemaVersion = 'v1'
+  const schemaVersion = 'v3-job-memory'
 
   if (providerName === 'openai') {
     const apiKey = process.env.OPENAI_API_KEY

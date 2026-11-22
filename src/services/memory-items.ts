@@ -1,3 +1,5 @@
+import { isMoneyFeaturesEnabled } from '../config/features.js'
+import { createJobMemory, patchJobMemory } from './job-memory-writes.js'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import {
@@ -108,6 +110,11 @@ export async function patchMemoryItem(
     where: { id: memoryItemId, jobId, isRemoved: false },
   })
   if (!existing) throw { code: ErrorCode.MEMORY_ITEM_NOT_FOUND, message: 'Memory item not found' }
+
+  if (!isMoneyFeaturesEnabled()) {
+    const updated = await patchJobMemory(existing, patch)
+    return normalizeMemoryItem(updated, updated.sourceFact ?? null)
+  }
 
   // The final memory type is the patched one (full edit) or the existing one
   // (category-only edit). A category may only live on category-eligible memory.
@@ -253,7 +260,7 @@ export async function patchMemoryItem(
     effUnit !== existing.unit ||
     finalTotalCostAmount !== existing.totalCostAmount
   if (financiallyMaterialChange) {
-    const owningPaymentId = await activeSupplierPaymentOwning(memoryItemId)
+    const owningPaymentId = isMoneyFeaturesEnabled() ? await activeSupplierPaymentOwning(memoryItemId) : null
     if (owningPaymentId) {
       supplierPaymentOwnsCost(
         owningPaymentId,
@@ -313,7 +320,7 @@ export async function removeMemoryItem(jobId: string, memoryItemId: string, user
 
   // Removing a cost an aggregate supplier payment covers would orphan that
   // receipt, so it is refused rather than silently shrinking a recorded payment.
-  const owningPaymentId = await activeSupplierPaymentOwning(memoryItemId)
+  const owningPaymentId = isMoneyFeaturesEnabled() ? await activeSupplierPaymentOwning(memoryItemId) : null
   if (owningPaymentId) {
     supplierPaymentOwnsCost(
       owningPaymentId,
@@ -330,7 +337,7 @@ export async function removeMemoryItem(jobId: string, memoryItemId: string, user
       where: { id: memoryItemId },
       data: { isRemoved: true, removedAt: new Date(), removedByUserId: userId },
     })
-    await tx.jobMoneyEvent.updateMany({
+    if (isMoneyFeaturesEnabled()) await tx.jobMoneyEvent.updateMany({
       where: { jobId, sourceMemoryItemId: memoryItemId, isDeleted: false },
       data: { isDeleted: true, deletedAt: new Date() },
     })
@@ -417,7 +424,7 @@ export async function returnMaterial(
   // Refund is optional; when present it must be a strict positive decimal and GBP.
   let refundAmount: string | null = null
   let refundCurrency: string | null = null
-  if (input.refundAmount != null && input.refundAmount !== '') {
+  if (isMoneyFeaturesEnabled() && input.refundAmount != null && input.refundAmount !== '') {
     const parsed = strictParsePositive(input.refundAmount)
     if (parsed === null || parsed <= 0) {
       throw { code: ErrorCode.INVALID_FIELD, message: 'refundAmount must be a positive decimal string' }
@@ -469,8 +476,7 @@ export async function returnMaterial(
         unit,
         supplierName,
         happenedAt,
-        refundAmount,
-        refundCurrency,
+        ...(isMoneyFeaturesEnabled() ? { refundAmount, refundCurrency } : {}),
         returnedFromMemoryItemId: source.id,
       },
       include: FACT_INCLUDE,
@@ -699,6 +705,11 @@ function deriveManualSummary(input: CreateMemoryItemInput): string | null {
 
 export async function createMemoryItem(jobId: string, userId: string, input: CreateMemoryItemInput) {
   await verifyJobOwnership(jobId, userId)
+
+  if (!isMoneyFeaturesEnabled()) {
+    const item = await createJobMemory(jobId, userId, input)
+    return normalizeMemoryItem(item, null)
+  }
 
   const memoryType = input.memoryType.toUpperCase()
   const isLabour = memoryType === 'LABOUR'

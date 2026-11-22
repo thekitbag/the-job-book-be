@@ -17,7 +17,8 @@
     "pilot:prepare": "tsx src/scripts/pilot-prepare.ts",
     "migrate:pilot-user": "tsx src/scripts/migrate-pilot-user.ts",
     "eval:extraction": "tsx src/extraction/eval/run.ts",
-    "eval:speech-memory": "tsx src/extraction/eval/speech-run.ts"
+    "eval:speech-memory": "tsx src/extraction/eval/speech-run.ts",
+    "export:money": "tsx src/scripts/export-money.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1064.0",

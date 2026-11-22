@@ -1,3 +1,5 @@
+import { isMoneyFeaturesEnabled } from '../config/features.js'
+import { QUEUE_MEMORY_TYPES, memoryLabel, ignoreMoneyInput } from '../lib/job-memory.js'
 import { createHash } from 'crypto'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
@@ -38,6 +40,7 @@ function resolveLabourDecision(
     personId: string | null | undefined
   },
 ): { labourPersonId: string | null; labourBudgetEnabled: boolean | null; labourPerson: string | null } {
+  if (!isMoneyFeaturesEnabled()) return { labourPersonId: null, labourBudgetEnabled: null, labourPerson: opts.personText ?? null }
   if (!opts.isLabour) {
     return { labourPersonId: null, labourBudgetEnabled: null, labourPerson: opts.personText ?? null }
   }
@@ -67,6 +70,7 @@ const SECTION_LABELS: Record<string, string> = {
   ordered_materials: 'Ordered materials',
   used_materials: 'Used materials',
   leftovers: 'Leftovers',
+  returned_materials: 'Returned materials',
   supplier_delivery_notes: 'Supplier delivery notes',
   customer_changes: 'Customer changes',
   watch_outs: 'Watch outs',
@@ -75,7 +79,8 @@ const SECTION_LABELS: Record<string, string> = {
   unclear_items: 'Unclear items',
 }
 
-const SECTION_KEYS = Object.keys(SECTION_LABELS)
+const SECTION_KEYS = Object.keys(SECTION_LABELS).filter(key => key !== 'returned_materials')
+const queueSectionKeys = (moneyEnabled: boolean) => moneyEnabled ? SECTION_KEYS : [...SECTION_KEYS, 'returned_materials']
 
 // Stable deterministic ID derived from the job + sorted source fact IDs.
 // Same inputs always produce the same ID so GET regenerations never invalidate
@@ -185,6 +190,7 @@ async function resolveDecisionCategory(
   topLevel: string | null | undefined,
   inner: string | null | undefined,
 ): Promise<string | null> {
+  if (!isMoneyFeaturesEnabled()) return null
   let provided: string | null | undefined
   if (topLevel !== undefined && inner !== undefined) {
     if (topLevel !== inner) {
@@ -327,12 +333,12 @@ function groupTypedFactsForSection(facts: FactWithContext[], sectionKey: string)
   return items
 }
 
-function groupAllFacts(facts: FactWithContext[]): GroupedItemData[] {
+function groupAllFacts(facts: FactWithContext[], moneyEnabled = true): GroupedItemData[] {
   const unclearFacts = facts.filter((f) => f.factType === 'UNCLEAR' || f.status === 'UNCLEAR')
   const typedFacts = facts.filter((f) => f.factType !== 'UNCLEAR' && f.status !== 'UNCLEAR')
 
   const bySectionKey = new Map<string, FactWithContext[]>()
-  for (const key of SECTION_KEYS.filter((k) => k !== 'unclear_items')) bySectionKey.set(key, [])
+  for (const key of queueSectionKeys(moneyEnabled).filter((k) => k !== 'unclear_items')) bySectionKey.set(key, [])
   for (const f of typedFacts) {
     const key = FACT_TYPE_TO_SECTION[f.factType]
     if (key && bySectionKey.has(key)) bySectionKey.get(key)!.push(f)
@@ -399,7 +405,7 @@ async function verifyJobOwnership(jobId: string, userId: string) {
 // Exported for tests that need to predict derived queue item ids.
 export const computeQueueItemId = computeGroupId
 
-export async function deriveFreshQueueSections(jobId: string, now: Date) {
+export async function deriveFreshQueueSections(jobId: string, now: Date, moneyEnabled = true) {
   const facts = await prisma.candidateFact.findMany({
     where: { jobId, status: { in: ['DRAFT', 'UNCLEAR'] } },
     include: {
@@ -410,7 +416,13 @@ export async function deriveFreshQueueSections(jobId: string, now: Date) {
   })
 
   const factMap = new Map(facts.map((f) => [f.id, f]))
-  const grouped = groupAllFacts(facts)
+  const visibleFacts = moneyEnabled ? facts : facts.filter(f => QUEUE_MEMORY_TYPES.has(f.factType) && (f.factType !== 'LABOUR' || f.labourHours != null)).map(f => ({ ...f, summary: memoryLabel(f), uncertaintyFlags: f.uncertaintyFlags.filter(flag => !/cost|budget|paid|refund/i.test(flag)), costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }))
+  const grouped = groupAllFacts(visibleFacts, moneyEnabled)
+  if (!moneyEnabled) for (const item of grouped) {
+    item.summary = memoryLabel(item.proposedMemory)
+    item.reviewLabel = item.summary
+    item.proposedMemory.summary = item.summary
+  }
 
   // Assign deterministic IDs so the same grouping always yields the same UUID
   // and an id returned by a GET stays valid for a later decision POST.
@@ -429,9 +441,9 @@ export async function deriveFreshQueueSections(jobId: string, now: Date) {
     sourceCandidateFactIds: item.sourceCandidateFactIds,
   }))
 
-  const sections = SECTION_KEYS.map((key) => ({
+  const sections = queueSectionKeys(moneyEnabled).filter(key => moneyEnabled || !['budget_costs', 'supplier_delivery_notes', 'customer_changes', 'watch_outs'].includes(key)).map((key) => ({
     key,
-    label: SECTION_LABELS[key],
+    label: !moneyEnabled && key === 'labour' ? 'Hours' : SECTION_LABELS[key],
     items: items
       .filter((item) => item.sectionKey === key)
       .map((item) => ({
@@ -455,11 +467,11 @@ export async function deriveFreshQueueSections(jobId: string, now: Date) {
 // this idempotent) and delete stale DRAFT rows whose source facts are no longer
 // unresolved. Never touches decided rows — they are the audit trail. Called
 // from the decision write path only, so read endpoints stay read-only.
-export async function syncReviewQueueForJob(jobId: string, now: Date) {
-  const { items } = await deriveFreshQueueSections(jobId, now)
+export async function syncReviewQueueForJob(jobId: string, now: Date, moneyEnabled = true) {
+  const { items } = await deriveFreshQueueSections(jobId, now, moneyEnabled)
   const currentIds = items.map((i) => i.id)
 
-  await prisma.queueItem.deleteMany({
+  if (moneyEnabled) await prisma.queueItem.deleteMany({
     where: currentIds.length > 0
       ? { jobId, status: 'draft', id: { notIn: currentIds } }
       : { jobId, status: 'draft' },
@@ -468,16 +480,17 @@ export async function syncReviewQueueForJob(jobId: string, now: Date) {
   if (items.length > 0) {
     await prisma.queueItem.createMany({ data: items, skipDuplicates: true })
   }
+  return items
 }
 
 // ── GET /api/jobs/:jobId/review-queue ─────────────────────────────────────────
 
-export async function getReviewQueue(jobId: string, userId: string) {
+export async function getReviewQueue(jobId: string, userId: string, moneyEnabled = true) {
   await verifyJobOwnership(jobId, userId)
 
   const now = new Date()
 
-  const { sections: baseSections, factMap } = await deriveFreshQueueSections(jobId, now)
+  const { sections: baseSections, factMap } = await deriveFreshQueueSections(jobId, now, moneyEnabled)
 
   // Active categories drive review-time suggestions, recomputed on every GET so a
   // queue item created before categories changed still reflects current categories.
@@ -538,7 +551,7 @@ export async function getReviewQueue(jobId: string, userId: string) {
     orderBy: { createdAt: 'desc' },
   })
 
-  const alreadyRemembered = memoryItems.map((m) => ({
+  const alreadyRemembered = memoryItems.filter(m => moneyEnabled || (m.memoryType !== 'BUDGET_COST' && (m.memoryType !== 'LABOUR' || m.labourHours != null))).map((m) => ({
     memoryItemId: m.id,
     summary: m.summary,
     memoryType: m.memoryType.toLowerCase(),
@@ -596,7 +609,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   // Reads no longer persist queue items, so materialise the derived queue now:
   // a deterministic id returned by a prior GET must exist as a queue_items row
   // before the decision can be recorded against it.
-  await syncReviewQueueForJob(jobId, new Date())
+  const moneyEnabled = isMoneyFeaturesEnabled()
+  const derivedItems = await syncReviewQueueForJob(jobId, new Date(), moneyEnabled)
 
   const item = await prisma.queueItem.findFirst({
     where: { id: payload.queueItemId, jobId },
@@ -611,6 +625,9 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     }
   }
 
+  const visibleItem = derivedItems.find(i => i.id === item.id)
+  if (!moneyEnabled && !visibleItem) throw { code: ErrorCode.QUEUE_ITEM_NOT_FOUND, message: 'Queue item not found' }
+
   if (payload.action === 'confirm' && (item.kind === 'CONTRADICTION' || item.kind === 'UNCLEAR_PROMPT')) {
     throw {
       code: ErrorCode.QUEUE_ITEM_CONFIRM_NOT_ALLOWED,
@@ -618,12 +635,14 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     }
   }
 
-  const pm = item.proposedMemory as unknown as ProposedMemory
+  const storedPm = (moneyEnabled ? item.proposedMemory : visibleItem!.proposedMemory) as unknown as ProposedMemory
+  const pm = moneyEnabled ? storedPm : { ...ignoreMoneyInput(storedPm), summary: memoryLabel(storedPm), costAmount: null, costCurrency: null, costQualifier: null, totalCostAmount: null }
+  const effectiveFlags = moneyEnabled ? item.uncertaintyFlags : visibleItem!.uncertaintyFlags
   const sourceCandidateFactIds = item.sourceCandidateFactIds
 
   if (payload.action === 'confirm') {
     const unresolvedFlags =
-      payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
+      payload.uncertaintyResolution === 'still_unsure' ? effectiveFlags : []
 
     const budgetCategoryId = await resolveDecisionCategory(
       jobId, pm.memoryType, payload.budgetCategoryId, undefined,
@@ -674,18 +693,19 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           supplierName: pm.supplierName,
           deliveryTiming: pm.deliveryTiming,
           locationOrUse: pm.locationOrUse,
-          costAmount: pm.costAmount,
-          costCurrency: pm.costCurrency,
-          costQualifier: pm.costQualifier,
-          totalCostAmount: pm.totalCostAmount,
+          ...(moneyEnabled ? {
+            costAmount: pm.costAmount,
+            costCurrency: pm.costCurrency,
+            costQualifier: pm.costQualifier,
+            totalCostAmount: pm.totalCostAmount,
+          } : {}),
           labourHours: pm.labourHours,
           labourPerson: confirmLabour.labourPerson,
           labourTask: pm.labourTask,
-          labourPersonId: confirmLabour.labourPersonId,
-          labourBudgetEnabled: confirmLabour.labourBudgetEnabled,
+          ...(moneyEnabled ? { labourPersonId: confirmLabour.labourPersonId, labourBudgetEnabled: confirmLabour.labourBudgetEnabled } : {}),
           happenedAt: confirmHappenedAt,
           unresolvedFlags,
-          budgetCategoryId,
+          ...(moneyEnabled ? { budgetCategoryId } : {}),
         },
       })
 
@@ -707,7 +727,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
   }
 
   if (payload.action === 'correct') {
-    const { corrected } = payload
+    const corrected = moneyEnabled ? payload.corrected : { ...ignoreMoneyInput(payload.corrected), summary: memoryLabel(payload.corrected), costAmount: undefined, costCurrency: undefined, costQualifier: undefined, totalCostAmount: undefined }
+    if (!moneyEnabled && (!QUEUE_MEMORY_TYPES.has(corrected.memoryType.toUpperCase()) || corrected.memoryType === 'unclear')) throw { code: ErrorCode.INVALID_FIELD, message: 'Choose a material or hours memory type' }
     const memoryType = (corrected.memoryType.toUpperCase()) as never
 
     const budgetCategoryId = await resolveDecisionCategory(
@@ -743,7 +764,7 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     }
 
     const conflict = hasCostConflict(corrected.quantity, corrected.costAmount, corrected.costQualifier, correctedTotalCostAmount)
-    const baseFlags = payload.uncertaintyResolution === 'still_unsure' ? item.uncertaintyFlags : []
+    const baseFlags = payload.uncertaintyResolution === 'still_unsure' ? effectiveFlags : []
     const unresolvedFlags =
       conflict && !baseFlags.includes('cost_uncertain') ? [...baseFlags, 'cost_uncertain'] : baseFlags
 
@@ -784,18 +805,19 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
           supplierName: corrected.supplierName ?? null,
           deliveryTiming: corrected.deliveryTiming ?? null,
           locationOrUse: corrected.locationOrUse ?? null,
-          costAmount: corrected.costAmount ?? null,
-          costCurrency: corrected.costCurrency ?? null,
-          costQualifier: corrected.costQualifier ?? null,
-          totalCostAmount: correctedTotalCostAmount,
+          ...(moneyEnabled ? {
+            costAmount: corrected.costAmount ?? null,
+            costCurrency: corrected.costCurrency ?? null,
+            costQualifier: corrected.costQualifier ?? null,
+            totalCostAmount: correctedTotalCostAmount,
+          } : {}),
           labourHours: corrected.labourHours ?? null,
           labourPerson: correctLabour.labourPerson,
           labourTask: corrected.labourTask ?? null,
-          labourPersonId: correctLabour.labourPersonId,
-          labourBudgetEnabled: correctLabour.labourBudgetEnabled,
+          ...(moneyEnabled ? { labourPersonId: correctLabour.labourPersonId, labourBudgetEnabled: correctLabour.labourBudgetEnabled } : {}),
           happenedAt: correctedHappenedAt,
           unresolvedFlags,
-          budgetCategoryId,
+          ...(moneyEnabled ? { budgetCategoryId } : {}),
         },
       })
 

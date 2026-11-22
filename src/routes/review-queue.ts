@@ -1,3 +1,4 @@
+import { isMoneyFeaturesEnabled } from '../config/features.js'
 import type { FastifyPluginAsync } from 'fastify'
 import { ErrorCode } from '../types/errors.js'
 import { getReviewQueue, submitQueueDecision } from '../services/review-queue.js'
@@ -18,7 +19,7 @@ const reviewQueueRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { jobId } = request.params
       try {
-        const result = await getReviewQueue(jobId, request.userId)
+        const result = await getReviewQueue(jobId, request.userId, isMoneyFeaturesEnabled())
         return reply.send(result)
       } catch (err: unknown) {
         const e = err as { code?: string; message?: string }

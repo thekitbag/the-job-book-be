@@ -1,6 +1,6 @@
 import type { CandidateFactDraft, ExtractionInput, ExtractionProvider, ExtractionResult } from './types.js'
 
-export const FAKE_EXTRACTION_SCHEMA_VERSION = 'v1'
+export const FAKE_EXTRACTION_SCHEMA_VERSION = 'v3-job-memory'
 
 export const FAKE_EXTRACTION_FACTS: CandidateFactDraft[] = [
   {
@@ -17,16 +17,13 @@ export const FAKE_EXTRACTION_FACTS: CandidateFactDraft[] = [
   },
   {
     factType: 'ordered_material',
-    summary: 'Bought 8 bags of hardcore from Jewson at £5 each',
+    summary: 'Bought 8 bags of hardcore from Jewson',
     materialName: 'hardcore',
     quantity: '8',
     unit: 'bags',
     supplierName: 'Jewson',
-    costAmount: '5',
-    costCurrency: 'GBP',
-    costQualifier: 'each',
     confidenceLabel: 'medium',
-    confidenceReason: 'Stated with quantity, unit cost, and supplier',
+    confidenceReason: 'Stated with quantity and supplier',
     uncertaintyFlags: [],
   },
   {
@@ -48,43 +45,25 @@ export const FAKE_EXTRACTION_FACTS: CandidateFactDraft[] = [
     confidenceReason: 'Hours and task stated; no cost mentioned',
     uncertaintyFlags: [],
   },
-  // A coherent labour observation remains one cost-aware Labour outcome. Budget
-  // rolls its trusted positive total up; it is not a second draft.
   {
     factType: 'labour',
     summary: 'Tom did 8 hours on electrics',
     labourHours: '8',
     labourTask: 'electrics',
     labourPerson: 'Tom',
-    costAmount: '35',
-    costCurrency: 'GBP',
-    costQualifier: 'per_hour',
-    totalCostAmount: '280',
     confidenceLabel: 'high',
     confidenceReason: 'Hours, person and task stated',
-    uncertaintyFlags: [],
-  },
-  {
-    factType: 'labour',
-    summary: 'Labour on the roof came to £600',
-    labourTask: 'roof',
-    costAmount: '600',
-    costCurrency: 'GBP',
-    costQualifier: 'total',
-    totalCostAmount: '600',
-    confidenceLabel: 'high',
-    confidenceReason: 'Explicit total labour cost stated, no hours',
     uncertaintyFlags: [],
   },
 ]
 
 export class FakeExtractionProvider implements ExtractionProvider {
   readonly name = 'fake'
-  readonly model = 'fake-v1'
+  readonly model = 'fake-v3-job-memory'
 
   async extractFacts(_input: ExtractionInput): Promise<ExtractionResult> {
     return {
-      facts: FAKE_EXTRACTION_FACTS,
+      facts: structuredClone(FAKE_EXTRACTION_FACTS),
       schemaVersion: FAKE_EXTRACTION_SCHEMA_VERSION,
     }
   }
@@ -92,7 +71,7 @@ export class FakeExtractionProvider implements ExtractionProvider {
 
 export class FailingExtractionProvider implements ExtractionProvider {
   readonly name = 'fake-failing'
-  readonly model = 'fake-v1'
+  readonly model = 'fake-v3-job-memory'
 
   async extractFacts(_input: ExtractionInput): Promise<ExtractionResult> {
     throw { code: 'EXTRACTION_PROVIDER_ERROR', message: 'Simulated extraction provider failure' }
