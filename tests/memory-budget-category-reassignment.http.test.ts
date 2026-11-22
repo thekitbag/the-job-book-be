@@ -102,7 +102,7 @@ async function costItem(opts: {
 async function itemWithSourceEvidence(categoryId: string, amount: string) {
   const note = await prisma.rawNote.create({
     data: {
-      jobId,
+      jobId, ownerUserId: ownerId, filedAt: new Date(),
       clientNoteId: randomUUID(),
       capturedAt: new Date('2026-08-01T08:00:00.000Z'),
       mimeType: 'audio/webm',

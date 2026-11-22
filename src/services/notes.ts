@@ -1,3 +1,9 @@
+import type { RawNote, CaptureContext } from '@prisma/client'
+import {
+  captureError,
+  lockNote,
+  requireFileableJob,
+} from './capture-ownership.js'
 import { v4 as uuidv4 } from 'uuid'
 import { prisma } from '../db/client.js'
 import type { AudioStorageProvider } from '../storage/index.js'
@@ -22,7 +28,9 @@ export function normaliseMimeType(raw: string): string {
 }
 
 export interface UploadNoteInput {
-  jobId: string
+  jobId: string | null
+  captureContext?: CaptureContext
+  legacy?: boolean
   userId: string
   clientNoteId: string
   capturedAt: Date
@@ -31,92 +39,136 @@ export interface UploadNoteInput {
   audioBuffer: Buffer
 }
 
-export interface UploadNoteResult {
-  noteId: string
-  clientNoteId: string
-  status: string
-  isDuplicate: boolean
+export const captureNote = (note: RawNote) => ({
+  id: note.id,
+  clientNoteId: note.clientNoteId,
+  jobId: note.jobId,
+  filedAt: note.filedAt,
+  captureContext: note.captureContext.toLowerCase(),
+  serverStatus: note.serverStatus,
+})
+
+export async function fileNote(
+  noteId: string,
+  userId: string,
+  jobId: string,
+  fromRetry = false,
+) {
+  return prisma.$transaction(async (tx) => {
+    const note = await lockNote(tx, noteId, userId)
+    await requireFileableJob(tx, jobId, userId)
+    if (note.jobId === jobId || (fromRetry && note.jobId)) return note
+    if (note.jobId)
+      throw captureError(
+        'NOTE_ALREADY_FILED',
+        'This note is already filed. Use move to change the job.',
+      )
+    return tx.rawNote.update({
+      where: { id: noteId },
+      data: { jobId, filedAt: new Date() },
+    })
+  })
 }
 
 export async function uploadNote(
   input: UploadNoteInput,
   storage: AudioStorageProvider,
-): Promise<UploadNoteResult> {
-  const { jobId, userId, clientNoteId, capturedAt, durationMs, mimeType, audioBuffer } = input
-
+) {
+  const {
+    jobId,
+    userId,
+    clientNoteId,
+    capturedAt,
+    durationMs,
+    mimeType,
+    audioBuffer,
+  } = input
   if (!isSupportedMimeType(mimeType)) {
-    throw { code: ErrorCode.AUDIO_UNSUPPORTED_TYPE, message: `MIME type not supported: ${mimeType}` }
-  }
-
-  if (audioBuffer.byteLength > MAX_AUDIO_BYTES) {
-    throw { code: ErrorCode.AUDIO_TOO_LARGE, message: `Audio exceeds max size of ${MAX_AUDIO_BYTES} bytes` }
-  }
-
-  const job = await prisma.job.findUnique({ where: { id: jobId } })
-  if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
-  if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
-
-  const existing = await prisma.rawNote.findUnique({
-    where: { jobId_clientNoteId: { jobId, clientNoteId } },
-    include: { audioObject: true },
-  })
-
-  if (existing) {
-    return {
-      noteId: existing.id,
-      clientNoteId: existing.clientNoteId,
-      status: existing.serverStatus,
-      isDuplicate: true,
+    throw {
+      code: ErrorCode.AUDIO_UNSUPPORTED_TYPE,
+      message: `MIME type not supported: ${mimeType}`,
     }
   }
+  if (audioBuffer.byteLength > MAX_AUDIO_BYTES) {
+    throw {
+      code: ErrorCode.AUDIO_TOO_LARGE,
+      message: `Audio exceeds max size of ${MAX_AUDIO_BYTES} bytes`,
+    }
+  }
+  if (
+    !Number.isFinite(capturedAt.getTime()) ||
+    (durationMs != null &&
+      (!Number.isInteger(durationMs) ||
+        durationMs < 0 ||
+        durationMs > 2147483647))
+  ) {
+    throw captureError('INVALID_FIELD', 'capturedAt or durationMs is invalid')
+  }
+  if (jobId) {
+    if (input.legacy) {
+      const job = await prisma.job.findUnique({ where: { id: jobId } })
+      if (!job) throw captureError('JOB_NOT_FOUND', 'Job not found')
+      if (job.ownerUserId !== userId)
+        throw captureError('FORBIDDEN', 'Access denied')
+    } else await requireFileableJob(prisma, jobId, userId)
+  }
+  const where = {
+    ownerUserId_clientNoteId: { ownerUserId: userId, clientNoteId },
+  }
+  const duplicate = async (note: RawNote) => ({
+    note:
+      jobId && !note.jobId
+        ? await fileNote(note.id, userId, jobId, true)
+        : note,
+    isDuplicate: true,
+  })
+  const existing = await prisma.rawNote.findUnique({
+    where,
+    include: { audioObject: true },
+  })
+  if (existing) return duplicate(existing)
 
-  const noteId = uuidv4()
+  const id = uuidv4()
   const storedMimeType = normaliseMimeType(mimeType)
-  const storageKey = `notes/${jobId}/${noteId}.webm`
-
+  const storageKey = `notes/${jobId ?? userId}/${id}.webm`
   const stored = await storage.store(storageKey, audioBuffer, storedMimeType)
-
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.rawNote.create({
+    const note = await prisma.$transaction(async (tx) => {
+      const row = await tx.rawNote.create({
         data: {
-          id: noteId,
+          id,
           jobId,
+          ownerUserId: userId,
           clientNoteId,
           capturedAt,
-          mimeType: storedMimeType,
           durationMs,
+          captureContext: input.captureContext ?? 'JOB',
+          filedAt: jobId ? new Date() : null,
+          mimeType: storedMimeType,
           sizeBytes: stored.sizeBytes,
           serverStatus: 'UPLOADED',
         },
       })
-
       await tx.audioObject.create({
         data: {
-          noteId,
+          noteId: id,
           storageKey: stored.key,
           bucket: stored.bucket,
           mimeType: storedMimeType,
           sizeBytes: stored.sizeBytes,
         },
       })
+      return row
     })
-  } catch (dbErr) {
-    if (isUniqueConstraintViolation(dbErr)) {
-      // A concurrent request already inserted this clientNoteId.
-      // Clean up the orphaned audio file we just wrote and return the winner.
-      await storage.delete(storageKey).catch(() => {})
-      const winner = await prisma.rawNote.findUnique({
-        where: { jobId_clientNoteId: { jobId, clientNoteId } },
-      })
-      if (winner) {
-        return { noteId: winner.id, clientNoteId: winner.clientNoteId, status: winner.serverStatus, isDuplicate: true }
-      }
+    return { note, isDuplicate: false }
+  } catch (err) {
+    await storage.delete(stored.key).catch(() => {})
+    if (isUniqueConstraintViolation(err)) {
+      const winner = await prisma.rawNote.findUnique({ where })
+      if (winner) return duplicate(winner)
     }
-    throw dbErr
+    throw err
   }
-
-  return { noteId, clientNoteId, status: 'UPLOADED', isDuplicate: false }
 }
 
 type TranscriptRow = {
@@ -130,7 +182,9 @@ type TranscriptRow = {
   extractionStatus?: string | null
 }
 
-function mapTranscriptStatus(t: TranscriptRow | undefined): 'waiting' | 'transcribing' | 'ready' | 'failed' {
+function mapTranscriptStatus(
+  t: TranscriptRow | undefined,
+): 'waiting' | 'transcribing' | 'ready' | 'failed' {
   if (!t) return 'waiting'
   if (t.status === 'TRANSCRIBING') return 'transcribing'
   if (t.status === 'COMPLETED') return 'ready'
@@ -138,7 +192,9 @@ function mapTranscriptStatus(t: TranscriptRow | undefined): 'waiting' | 'transcr
   return 'waiting'
 }
 
-function mapExtractionStatus(t: TranscriptRow | undefined): 'waiting' | 'extracting' | 'ready' | 'failed' {
+function mapExtractionStatus(
+  t: TranscriptRow | undefined,
+): 'waiting' | 'extracting' | 'ready' | 'failed' {
   if (!t || !t.extractionStatus) return 'waiting'
   if (t.extractionStatus === 'EXTRACTING') return 'extracting'
   if (t.extractionStatus === 'COMPLETED') return 'ready'
@@ -148,13 +204,17 @@ function mapExtractionStatus(t: TranscriptRow | undefined): 'waiting' | 'extract
 
 // Inline summary used on list/detail responses — status only, no text
 function transcriptSummary(t: TranscriptRow | undefined) {
-  return { status: mapTranscriptStatus(t), extractionStatus: mapExtractionStatus(t) }
+  return {
+    status: mapTranscriptStatus(t),
+    extractionStatus: mapExtractionStatus(t),
+  }
 }
 
 export async function listNotes(jobId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
-  if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+  if (job.ownerUserId !== userId)
+    throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
   const notes = await prisma.rawNote.findMany({
     where: { jobId },
@@ -180,7 +240,8 @@ export async function listNotes(jobId: string, userId: string) {
 export async function getNote(jobId: string, noteId: string, userId: string) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
-  if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+  if (job.ownerUserId !== userId)
+    throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
   const note = await prisma.rawNote.findFirst({
     where: { id: noteId, jobId },
@@ -204,10 +265,15 @@ export async function getNote(jobId: string, noteId: string, userId: string) {
   }
 }
 
-export async function getTranscript(jobId: string, noteId: string, userId: string) {
+export async function getTranscript(
+  jobId: string,
+  noteId: string,
+  userId: string,
+) {
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) throw { code: ErrorCode.JOB_NOT_FOUND, message: 'Job not found' }
-  if (job.ownerUserId !== userId) throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
+  if (job.ownerUserId !== userId)
+    throw { code: ErrorCode.FORBIDDEN, message: 'Access denied' }
 
   const note = await prisma.rawNote.findFirst({
     where: { id: noteId, jobId },
@@ -230,7 +296,11 @@ export async function getTranscript(jobId: string, noteId: string, userId: strin
   }
 
   if (status === 'failed') {
-    return { noteId, status: 'failed' as const, errorCode: t.errorCode ?? 'UNKNOWN' }
+    return {
+      noteId,
+      status: 'failed' as const,
+      errorCode: t.errorCode ?? 'UNKNOWN',
+    }
   }
 
   return {
@@ -245,7 +315,7 @@ export async function getTranscript(jobId: string, noteId: string, userId: strin
   }
 }
 
-function isUniqueConstraintViolation(err: unknown): boolean {
+export function isUniqueConstraintViolation(err: unknown): boolean {
   return (
     typeof err === 'object' &&
     err !== null &&

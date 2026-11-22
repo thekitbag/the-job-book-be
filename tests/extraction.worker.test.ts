@@ -12,10 +12,11 @@ vi.mock('../src/db/client.js', () => ({
   prisma: {
     transcript: {
       findUnique: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       update: vi.fn().mockResolvedValue({}),
     },
     rawNote: {
-      update: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({ jobId: 'job-worker-1' }),
     },
     candidateFact: {
       create: vi.fn().mockResolvedValue({}),
@@ -127,7 +128,7 @@ describe('runExtraction — success path', () => {
     await runExtraction(TRANSCRIPT_ID, new FakeExtractionProvider())
 
     const txUpdates = vi.mocked(prisma.transcript.update as any).mock.calls.map((c: any) => c[0].data)
-    expect(txUpdates).toContainEqual(expect.objectContaining({ extractionStatus: 'EXTRACTING' }))
+    expect(prisma.transcript.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ extractionStatus: 'EXTRACTING' }) }))
     expect(txUpdates).toContainEqual(expect.objectContaining({ extractionStatus: 'COMPLETED' }))
 
     const noteUpdates = vi.mocked(prisma.rawNote.update as any).mock.calls.map((c: any) => c[0].data.serverStatus)

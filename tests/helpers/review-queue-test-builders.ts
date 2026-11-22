@@ -62,7 +62,7 @@ export async function resetReviewQueueMocks() {
   vi.mocked(prisma.user.findUnique as any).mockResolvedValue(makeUser())
   vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
-  vi.mocked((prisma.candidateFact as any).updateMany).mockResolvedValue({ count: 1 })
+  vi.mocked((prisma.candidateFact as any).updateMany).mockImplementation(async ({ where }: any) => ({ count: where.id.in.length }))
   // Confirm/correct look up the source note's capture day to date a memory whose
   // type reads its date back as evidence and whose draft carries none.
   vi.mocked((prisma.candidateFact as any).findUnique).mockResolvedValue({

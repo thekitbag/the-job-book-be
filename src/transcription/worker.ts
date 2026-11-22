@@ -44,6 +44,11 @@ export async function runTranscription(
       mimeType: note.mimeType,
     })
 
+    await prisma.rawNote.update({
+      where: { id: noteId },
+      data: { serverStatus: 'TRANSCRIBED' },
+    })
+
     await prisma.transcript.update({
       where: { id: transcript.id },
       data: {
@@ -54,11 +59,6 @@ export async function runTranscription(
         providerResponseId: result.providerResponseId ?? null,
         completedAt: new Date(),
       },
-    })
-
-    await prisma.rawNote.update({
-      where: { id: noteId },
-      data: { serverStatus: 'TRANSCRIBED' },
     })
 
     transcriptionTranscriptId = transcript.id

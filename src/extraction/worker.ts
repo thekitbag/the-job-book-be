@@ -66,13 +66,15 @@ export async function runExtraction(
   })
 
   // Only extract from completed transcripts with text; skip if already done or in-flight
-  if (!transcript || transcript.status !== 'COMPLETED' || !transcript.text) return
+  if (!transcript || !transcript.note.jobId || !transcript.note.job || transcript.status !== 'COMPLETED' || !transcript.text) return
   if (transcript.extractionStatus === 'COMPLETED' || transcript.extractionStatus === 'EXTRACTING') return
 
-  await prisma.transcript.update({
-    where: { id: transcriptId },
+  const claim = await prisma.transcript.updateMany({
+    where: { id: transcriptId, status: 'COMPLETED', OR: [{ extractionStatus: null }, { extractionStatus: { in: ['PENDING', 'FAILED'] } }] },
     data: { extractionStatus: 'EXTRACTING', extractionStartedAt: new Date() },
   })
+
+  if (claim.count !== 1) return
 
   await prisma.rawNote.update({
     where: { id: transcript.noteId },
@@ -106,6 +108,12 @@ export async function runExtraction(
     })
 
     await prisma.$transaction(async (tx) => {
+      // Lock the note when publishing. A move that happened during the provider
+      // call must not leave newly extracted facts on the previous job.
+      const currentNote = await tx.rawNote.update({
+        where: { id: transcript.noteId }, data: { serverStatus: 'EXTRACTED' }, select: { jobId: true },
+      })
+      if (!currentNote.jobId) throw new Error('Filed note lost its job')
       // Delete any facts from a prior partial run before re-creating them atomically
       await tx.candidateFact.deleteMany({ where: { sourceTranscriptId: transcriptId } })
 
@@ -113,7 +121,7 @@ export async function runExtraction(
         const isUnclear = fact.factType === 'unclear'
         await tx.candidateFact.create({
           data: {
-            jobId: transcript.note.jobId,
+            jobId: currentNote.jobId,
             sourceNoteId: transcript.noteId,
             sourceTranscriptId: transcriptId,
             factType: toDbFactType(fact.factType) as never,
@@ -157,11 +165,6 @@ export async function runExtraction(
       })
     })
 
-    await prisma.rawNote.update({
-      where: { id: transcript.noteId },
-      data: { serverStatus: 'EXTRACTED' },
-    })
-
     succeeded = true
   } catch (err: unknown) {
     const errorCode = (err as { code?: string })?.code ?? 'UNKNOWN'
@@ -187,4 +190,16 @@ export async function runExtraction(
   }
 
   void succeeded // extraction result used only for status tracking above
+}
+
+// Filing and completed transcription both call this. The conditional database
+// claim in runExtraction is the only way either trigger starts a provider call.
+export async function triggerFiledExtraction(noteId: string, provider: ExtractionProvider) {
+  const transcript = await prisma.transcript.findFirst({
+    where: { noteId, note: { jobId: { not: null } }, status: 'COMPLETED',
+      OR: [{ extractionStatus: null }, { extractionStatus: 'PENDING' }] },
+    orderBy: [{ revision: 'desc' }, { createdAt: 'desc' }],
+    select: { id: true },
+  })
+  if (transcript) await runExtraction(transcript.id, provider)
 }

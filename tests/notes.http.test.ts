@@ -120,8 +120,8 @@ beforeEach(async () => {
 
   // Default: transaction creates successfully
   vi.mocked(prisma.$transaction as any).mockImplementation(async (fn: any) => {
-    await fn({
-      rawNote: { create: vi.fn().mockResolvedValue({}) },
+    return fn({
+      rawNote: { create: vi.fn(({ data }) => data) },
       audioObject: { create: vi.fn().mockResolvedValue({}) },
     })
   })

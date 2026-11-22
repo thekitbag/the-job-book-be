@@ -1,3 +1,4 @@
+import captureRoutes from './routes/capture.js'
 import jobLogRoutes from './routes/job-log.js'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
@@ -84,6 +85,7 @@ export function buildApp(opts: AppOptions = {}) {
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)
   fastify.register(jobLogRoutes)
+  fastify.register(captureRoutes, { storage, extraction })
   fastify.register(notesRoutes, { storage, transcription, extraction })
   fastify.register(factsRoutes)
   fastify.register(reviewQueueRoutes)

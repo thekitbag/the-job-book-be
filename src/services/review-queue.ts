@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { isMoneyFeaturesEnabled } from '../config/features.js'
 import { QUEUE_MEMORY_TYPES, memoryLabel, ignoreMoneyInput } from '../lib/job-memory.js'
 import { createHash } from 'crypto'
@@ -405,8 +406,8 @@ async function verifyJobOwnership(jobId: string, userId: string) {
 // Exported for tests that need to predict derived queue item ids.
 export const computeQueueItemId = computeGroupId
 
-export async function deriveFreshQueueSections(jobId: string, now: Date, moneyEnabled = true) {
-  const facts = await prisma.candidateFact.findMany({
+export async function deriveFreshQueueSections(jobId: string, now: Date, moneyEnabled = true, db: Pick<Prisma.TransactionClient, 'candidateFact'> = prisma) {
+  const facts = await db.candidateFact.findMany({
     where: { jobId, status: { in: ['DRAFT', 'UNCLEAR'] } },
     include: {
       sourceNote: { select: { id: true, capturedAt: true } },
@@ -603,6 +604,21 @@ async function sourceNoteCaptureDay(sourceCandidateFactIds: string[]): Promise<D
   return capturedAt ? ukLocalNoon(ukLocalDayString(capturedAt)) : null
 }
 
+// A move or another decision can win after the queue was derived. Check
+// the source rows in the write transaction before recording trusted memory.
+async function decideQueueFacts(
+  tx: Prisma.TransactionClient, jobId: string, ids: string[],
+  status: 'CONFIRMED' | 'CORRECTED' | 'REJECTED',
+) {
+  const result = await tx.candidateFact.updateMany({
+    where: { id: { in: ids }, jobId, status: { in: ['DRAFT', 'UNCLEAR'] } },
+    data: { status },
+  })
+  if (result.count !== ids.length) {
+    throw { code: ErrorCode.QUEUE_ITEM_ALREADY_DECIDED, message: 'This check changed. Refresh the review queue.' }
+  }
+}
+
 export async function submitQueueDecision(jobId: string, userId: string, payload: QueueDecisionPayload) {
   await verifyJobOwnership(jobId, userId)
 
@@ -667,7 +683,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     })
 
     const result = await prisma.$transaction(async (tx) => {
-      await tx.queueItem.update({ where: { id: item.id }, data: { status: 'confirmed' } })
+      await tx.queueItem.update({ where: { id: item.id, jobId, status: 'draft' }, data: { status: 'confirmed' } })
+      await decideQueueFacts(tx, jobId, sourceCandidateFactIds, 'CONFIRMED')
 
       const decision = await tx.reviewDecision.create({
         data: {
@@ -709,10 +726,6 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
         },
       })
 
-      await tx.candidateFact.updateMany({
-        where: { id: { in: sourceCandidateFactIds } },
-        data: { status: 'CONFIRMED' },
-      })
 
       return memoryItem
     })
@@ -779,7 +792,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
     })
 
     const result = await prisma.$transaction(async (tx) => {
-      await tx.queueItem.update({ where: { id: item.id }, data: { status: 'corrected' } })
+      await tx.queueItem.update({ where: { id: item.id, jobId, status: 'draft' }, data: { status: 'corrected' } })
+      await decideQueueFacts(tx, jobId, sourceCandidateFactIds, 'CORRECTED')
 
       const decision = await tx.reviewDecision.create({
         data: {
@@ -821,10 +835,6 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
         },
       })
 
-      await tx.candidateFact.updateMany({
-        where: { id: { in: sourceCandidateFactIds } },
-        data: { status: 'CORRECTED' },
-      })
 
       return memoryItem
     })
@@ -840,7 +850,8 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
 
   // dismiss
   await prisma.$transaction(async (tx) => {
-    await tx.queueItem.update({ where: { id: item.id }, data: { status: 'dismissed' } })
+    await tx.queueItem.update({ where: { id: item.id, jobId, status: 'draft' }, data: { status: 'dismissed' } })
+    await decideQueueFacts(tx, jobId, sourceCandidateFactIds, 'REJECTED')
 
     await tx.reviewDecision.create({
       data: {
@@ -853,10 +864,6 @@ export async function submitQueueDecision(jobId: string, userId: string, payload
       },
     })
 
-    await tx.candidateFact.updateMany({
-      where: { id: { in: sourceCandidateFactIds } },
-      data: { status: 'REJECTED' },
-    })
   })
 
   return {

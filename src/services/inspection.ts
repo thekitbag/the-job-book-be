@@ -25,6 +25,7 @@ const DECISION_ACTION_MAP: Record<string, string> = {
   CONFIRM_SECTION: 'confirm_section',
   ADD_MISSING: 'add_missing',
   QUEUE_CONFIRM: 'queue_confirm',
+  NOTE_LOOKS_RIGHT: 'note_looks_right',
   QUEUE_CORRECT: 'queue_correct',
   QUEUE_DISMISS: 'queue_dismiss',
 }
