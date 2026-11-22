@@ -101,6 +101,10 @@ export function compareFixture(
     }
   }
 
+  if (fixture.allowEmpty && actual.length === 0) {
+    return { fixture, actual, status: 'pass', factComparisons: [], inventedFacts: [] }
+  }
+
   const matchedActualIndices = new Set<number>()
   const factComparisons: FactComparison[] = []
 

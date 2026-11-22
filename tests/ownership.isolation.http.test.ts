@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 // Real-DB cross-user isolation audit: user B must not be able to list, fetch,
 // or mutate user A's jobs or any child data, even knowing the IDs. Also proves
 // every job-data route rejects unauthenticated requests, and that internal
@@ -289,7 +290,9 @@ describe('cross-user isolation: user B against user A data', () => {
 
   it.each(ATTEMPTS.map((a) => [a.name, a] as const))('unauthenticated %s is rejected with 401', async (_name, a) => {
     const res = await attempt(a, {})
-    expect(res.statusCode).toBe(401)
+    const disabledRoute = !moneyEnabled && /\/(budget-categories|budget-summary)(\/|$)/.test(a.url())
+    expect(res.statusCode).toBe(disabledRoute ? 404 : 401)
+    if (disabledRoute) expect(res.json().code).toBe('FEATURE_DISABLED')
   })
 })
 

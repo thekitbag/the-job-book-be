@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { runExtraction } from '../src/extraction/worker.js'
 import {
@@ -352,7 +353,7 @@ describe('runExtraction — pilot correction guard', () => {
 
 // ── cost fields ───────────────────────────────────────────────────────────────
 
-describe('runExtraction — cost field persistence and safe total derivation', () => {
+describe.runIf(moneyEnabled)('runExtraction — cost field persistence and safe total derivation', () => {
   it('persists cost fields and derives total from 8 × £5 each', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.transcript.findUnique as any).mockResolvedValueOnce(
@@ -800,7 +801,7 @@ describe('runExtraction — labour happenedAt (effective day)', () => {
 
     const data = vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data
     expect(data.happenedAt?.toISOString()).toBe('2026-07-07T11:00:00.000Z')
-    expect(data.totalCostAmount).toBe('280')
+    expect(data.totalCostAmount).toBe(moneyEnabled ? '280' : undefined)
   })
 
   it('resolves a provider date-only happenedAt to UK local noon of that day', async () => {
@@ -906,7 +907,7 @@ describe('runExtraction — safe material total derivation', () => {
       confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
     }))
     const { prisma: p2 } = await import('../src/db/client.js')
-    expect(vi.mocked(p2.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+    expect(vi.mocked(p2.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 
   it('does not derive a total when the currency is missing', async () => {
@@ -918,6 +919,6 @@ describe('runExtraction — safe material total derivation', () => {
       costAmount: '20', costCurrency: null, costQualifier: 'each',
       confidenceLabel: 'high', confidenceReason: 'x', uncertaintyFlags: [],
     }))
-    expect(vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBeNull()
+    expect(vi.mocked(prisma.candidateFact.create as any).mock.calls[0][0].data.totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 })

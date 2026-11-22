@@ -1,3 +1,4 @@
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // GET /api/jobs/:jobId/memory-view — summarySections: cost fields/labels on
 // section items, summary-section shape, uncertainty flag sourcing, and
 // like-for-like consolidation rules.
@@ -41,12 +42,12 @@ describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections',
 
     const body = res.json<{ sections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
     const ordered = body.sections.find((s) => s.key === 'ordered_materials')
-    expect(ordered?.items[0].costAmount).toBe('5')
-    expect(ordered?.items[0].costCurrency).toBe('GBP')
-    expect(ordered?.items[0].costQualifier).toBe('each')
-    expect(ordered?.items[0].totalCostAmount).toBe('40')
-    expect(ordered?.items[0].unitCostLabel).toBe('£5 each')
-    expect(ordered?.items[0].lineTotalLabel).toBe('£40 total')
+    expect(ordered?.items[0].costAmount).toBe(moneyEnabled ? '5' : undefined)
+    expect(ordered?.items[0].costCurrency).toBe(moneyEnabled ? 'GBP' : undefined)
+    expect(ordered?.items[0].costQualifier).toBe(moneyEnabled ? 'each' : undefined)
+    expect(ordered?.items[0].totalCostAmount).toBe(moneyEnabled ? '40' : undefined)
+    expect(ordered?.items[0].unitCostLabel).toBe(moneyEnabled ? '£5 each' : undefined)
+    expect(ordered?.items[0].lineTotalLabel).toBe(moneyEnabled ? '£40 total' : undefined)
   })
 
   it('includes summarySections with correct keys and labels', async () => {
@@ -76,8 +77,8 @@ describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections',
     const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
     const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
     expect(ordered?.items).toHaveLength(1)
-    expect(ordered?.items[0].costLabel).toBe('£5 each')
-    expect(ordered?.items[0].totalCostLabel).toBe('£40 total')
+    expect(ordered?.items[0].costLabel).toBe(moneyEnabled ? '£5 each' : undefined)
+    expect(ordered?.items[0].totalCostLabel).toBe(moneyEnabled ? '£40 total' : undefined)
     expect(ordered?.items[0].memoryItemIds).toEqual([MEMORY_ID])
     expect(ordered?.items[0].uncertaintyFlags).toEqual([])
   })
@@ -91,8 +92,8 @@ describe('GET /api/jobs/:jobId/memory-view — cost fields and summarySections',
 
     const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
     const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
-    expect(ordered?.items[0].costLabel).toBeNull()
-    expect(ordered?.items[0].totalCostLabel).toBeNull()
+    expect(ordered?.items[0].costLabel).toBe(moneyEnabled ? null : undefined)
+    expect(ordered?.items[0].totalCostLabel).toBe(moneyEnabled ? null : undefined)
   })
 
   it('section items uncertaintyFlags come from unresolvedFlags', async () => {
@@ -283,8 +284,8 @@ describe('GET /api/jobs/:jobId/memory-view — summarySections consolidation', (
     const body = res.json<{ summarySections: Array<{ key: string; items: Array<Record<string, unknown>> }> }>()
     const ordered = body.summarySections.find((s) => s.key === 'ordered_materials')
     expect(ordered?.items).toHaveLength(1)
-    expect(ordered?.items[0].costLabel).toBeNull()
-    expect(ordered?.items[0].totalCostLabel).toBeNull()
+    expect(ordered?.items[0].costLabel).toBe(moneyEnabled ? null : undefined)
+    expect(ordered?.items[0].totalCostLabel).toBe(moneyEnabled ? null : undefined)
   })
 
   it('keeps rows separate when materialName is null even if unit matches', async () => {

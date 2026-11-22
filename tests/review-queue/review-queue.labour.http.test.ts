@@ -1,3 +1,5 @@
+import { computeQueueItemId } from '../../src/services/review-queue.js'
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // Review queue labour behaviour: labour section grouping, labour category
 // suggestion, labour field persistence on confirm/correct, and labour fields
 // on alreadyRemembered.
@@ -27,6 +29,11 @@ afterAll(() => app.close())
 beforeEach(async () => {
   vi.clearAllMocks()
   prisma = await resetReviewQueueMocks()
+  vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact({
+    factType: 'LABOUR', materialName: null, quantity: null, unit: null, locationOrUse: null,
+    summary: 'Tom did 8 hours on electrics at £35 an hour', labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics',
+    happenedAt: new Date('2026-06-09T11:00:00.000Z'),
+  })])
 })
 
 describe('review-queue — labour', () => {
@@ -43,7 +50,7 @@ describe('review-queue — labour', () => {
     expect(pm.labourTask).toBe('fitting cladding')
   })
 
-  it('suggests an active category named "labour" for labour facts', async () => {
+  it.runIf(moneyEnabled)('suggests an active category named "labour" for labour facts', async () => {
     vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact({ factType: 'LABOUR' })])
     vi.mocked(prisma.queueItem.findMany as any).mockResolvedValueOnce([makeLabourQueueItem()])
     vi.mocked(prisma.jobBudgetCategory.findMany as any).mockResolvedValue([makeBudgetCategory({ id: CAT_LABOUR, name: 'labour' })])
@@ -59,11 +66,11 @@ describe('review-queue — labour', () => {
     const res = await app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload: { queueItemId: ITEM_ID, action: 'confirm', budgetCategoryId: CAT_LABOUR } })
     expect(res.statusCode).toBe(200)
     expect(prisma.memoryItem.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      memoryType: 'LABOUR', labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', totalCostAmount: '280', budgetCategoryId: CAT_LABOUR,
+      memoryType: 'LABOUR', labourHours: '8', labourPerson: 'Tom', labourTask: 'electrics', ...(moneyEnabled ? { totalCostAmount: '280', budgetCategoryId: CAT_LABOUR } : {}),
     }) }))
   })
 
-  it('correct derives a safe per_hour total for labour', async () => {
+  it.runIf(moneyEnabled)('correct derives a safe per_hour total for labour', async () => {
     vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeLabourQueueItem())
     const res = await app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload: {
       queueItemId: ITEM_ID, action: 'correct',
@@ -73,7 +80,7 @@ describe('review-queue — labour', () => {
     expect(prisma.memoryItem.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ labourHours: '10', totalCostAmount: '350' }) }))
   })
 
-  it('allows a category on labour via confirm', async () => {
+  it.runIf(moneyEnabled)('allows a category on labour via confirm', async () => {
     vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValue(makeLabourQueueItem())
     vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(makeBudgetCategory({ id: CAT_LABOUR, name: 'labour' }))
     const res = await app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload: { queueItemId: ITEM_ID, action: 'confirm', budgetCategoryId: CAT_LABOUR } })
@@ -98,7 +105,7 @@ function makeLabourPerson(o?: object) {
   }
 }
 
-describe('review-queue — labour people enrichment', () => {
+describe.runIf(moneyEnabled)('review-queue — labour people enrichment', () => {
   const post = (payload: any) =>
     app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload })
 
@@ -257,11 +264,16 @@ describe('review-queue — labour happenedAt (Labour Tracking V2)', () => {
 
   it('confirming two labour queue items creates two memory items', async () => {
     const itemA = makeLabourQueueItem()
-    const itemB = makeLabourQueueItem({ id: 'queue-item-2', summary: 'Kurt worked 6 hours', proposedMemory: { ...(makeLabourQueueItem() as any).proposedMemory, summary: 'Kurt worked 6 hours', labourPerson: 'Kurt', labourHours: '6' }, sourceCandidateFactIds: ['queue-fact-kurt'] })
+    const kurtId = computeQueueItemId(JOB_ID, ['queue-fact-kurt'])
+    const itemB = makeLabourQueueItem({ id: kurtId, summary: 'Kurt worked 6 hours', proposedMemory: { ...(makeLabourQueueItem() as any).proposedMemory, summary: 'Kurt worked 6 hours', labourPerson: 'Kurt', labourHours: '6' }, sourceCandidateFactIds: ['queue-fact-kurt'] })
+    vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([
+      makeFact({ factType: 'LABOUR', materialName: null, labourPerson: 'Tom', labourHours: '8' }),
+      makeFact({ id: 'queue-fact-kurt', factType: 'LABOUR', materialName: null, labourPerson: 'Kurt', labourHours: '6' }),
+    ])
     vi.mocked(prisma.queueItem.findFirst as any).mockResolvedValueOnce(itemA).mockResolvedValueOnce(itemB)
     const post = (queueItemId: string) => app.inject({ method: 'POST', url: `/api/jobs/${JOB_ID}/review-queue-decisions`, headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID }, payload: { queueItemId, action: 'confirm' } })
     expect((await post(ITEM_ID)).statusCode).toBe(200)
-    expect((await post('queue-item-2')).statusCode).toBe(200)
+    expect((await post(kurtId)).statusCode).toBe(200)
     const created = vi.mocked(prisma.memoryItem.create as any).mock.calls.map((c: any) => c[0].data)
     expect(created).toHaveLength(2)
     expect(created.map((d: any) => d.labourPerson)).toEqual(['Tom', 'Kurt'])

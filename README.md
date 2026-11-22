@@ -56,6 +56,18 @@ Two styles of test coexist:
 
 External providers are always faked in tests: no storage, transcription, extraction, or email API calls.
 
+CI also runs the non-money and mixed suites with the production default (money
+flag absent), independently of the inherited security audit:
+
+```bash
+env -u MONEY_FEATURES_ENABLED npm run test:job-memory
+```
+
+This profile asserts the flag is unset at suite startup. Money-only contracts and
+money-specific cases in mixed suites remain covered by the full restoration run.
+Its initial failures and resolutions are recorded in
+`docs/verification/job-memory-default-off-failures.md`.
+
 Standard verification before handing work back:
 
 ```bash

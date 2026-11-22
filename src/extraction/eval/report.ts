@@ -120,6 +120,10 @@ export function generateMarkdownReport(
       continue
     }
 
+    if (fixture.allowEmpty && actual.length === 0) {
+      lines.push('_An empty result is an explicitly allowed safe alternative for this vague note._', '')
+    }
+
     // Fact comparisons
     for (const fc of factComparisons) {
       const exp = fixture.expected[fc.expectedIndex]

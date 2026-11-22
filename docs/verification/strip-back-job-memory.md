@@ -150,3 +150,63 @@ is escaped for spreadsheet safety. New output directories are recommended;
 existing CSVs are not overwritten.
 
 No Slice 2 work, frontend work, release merge or production deployment is included.
+
+## Pre-merge follow-up: default-off CI and current eval expectations
+
+No production route, service, provider, worker or schema changed in this follow-up.
+Labour without hours retains its existing behavior pending the coming spec.
+Dependency versions, lockfile and the inherited audit step are unchanged.
+
+CI now has an independent **Non-money tests (gate unset)** job. It runs:
+
+```bash
+env -u MONEY_FEATURES_ENABLED npm run test:job-memory -- --reporter=default --reporter=json --outputFile=reports/test/job-memory.json
+```
+
+`vitest.job-memory.config.ts` selects the non-money/mixed suites. Test setup
+removes the flag and asserts it is absent before every selected test file starts.
+Money-only files and the old restored `labourHoursSummary` contract stay in the
+existing full-suite run. Mixed suites run their non-money cases in both modes;
+only explicitly money-specific cases are restoration-only. The new job uploads
+per-test JSON even on failure and runs independently of the inherited audit.
+
+Local result: **920 passed, 54 restoration-only skips, 0 failures; 41 files**.
+The first broad run found **152 failures in 14 files**, all stale restored-contract
+assertions or incomplete mocks/fixtures. Each is listed with its reason and
+resolution in [the failure inventory](job-memory-default-off-failures.md).
+In particular, Workshop still compares actual stored historical money before and
+after every action when builder money routes are unavailable. Ordinary review
+decision mocks now include current source facts and matching deterministic IDs.
+The entire restore run remains green: **1,320 passed, 20 pre-existing skips**.
+
+The current extraction fixtures retain the same 32 utterances but replace removed
+note-type expectations. Delivery/change/warning notes expect no separate note
+fact; delivered hardcore remains an ordered material; the mixed note retains its
+two materials. The vague `unclear-001` fixture now explicitly encodes the safe
+empty-or-unclear alternative already stated in its notes. It still rejects
+invented material facts; other material fixtures still fail if empty.
+No extraction prompt or model setting was changed.
+
+The real-provider command was:
+
+```bash
+node --env-file=.env --import tsx src/extraction/eval/run.ts --provider openai --out reports/extraction-eval/strip-back-current-expectations.md
+```
+
+Result: **28 pass, 4 needs review, 0 fail; 0 unexplained failures**.
+The four review cases are explicitly retained rather than weakening their checks:
+
+| Fixture | Remaining review reason |
+|---|---|
+| `used-001` | `OSB` versus expected `OSB boards`; quantity/unit retained. |
+| `used-002` | Approximate “one and a bit” retained, but confidence high and `approximate_quantity` missing. |
+| `contradiction-001` | Transcript never names insulation; model leaves material null while the old fixture expects “insulation packs.” |
+| `workshop-002` | Rough “half a box” retained, but confidence high and `approximate_quantity` missing. |
+
+Current-fixture field results: material name **18/20**, quantity **14/14**,
+supplier **5/5**, labour hours **6/6**, labour person **6/6**. These denominators
+reflect the corrected expectations and are not a replacement for the original
+same-expectation before/after table above. The full current report, including raw
+synthetic outputs and field diffs, is saved locally at the command's output path.
+The two missing uncertainty flags remain visible quality follow-ups, not hidden
+passes. No production data or pilot audio was used.

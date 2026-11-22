@@ -1,3 +1,4 @@
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // Real-DB regression tests for the queue read/write split: GET review-queue,
 // GET memory-view, and the inspection read derive the queue without touching
 // queue_items; the decision POST materialises the derived row first, so ids
@@ -95,7 +96,7 @@ describe('read endpoints are read-only with respect to queue_items', () => {
     expect(res.statusCode).toBe(200)
     const ordered = res.json().sections.find((s: any) => s.key === 'ordered_materials')
     expect(ordered.items).toHaveLength(1)
-    expect(ordered.items[0].summary).toBe('Ordered 2 bags of cement')
+    expect(ordered.items[0].summary).toBe(moneyEnabled ? 'Ordered 2 bags of cement' : 'cement, 2 bags')
     // still no persisted rows: derivation only
     expect(await countQueueRows()).toBe(0)
   })
@@ -149,7 +150,7 @@ describe('decision write path materialises the derived queue', () => {
     expect(row?.status).toBe('confirmed')
     const memory = await prisma.memoryItem.findMany({ where: { jobId } })
     expect(memory).toHaveLength(1)
-    expect(memory[0].summary).toBe('Ordered 2 bags of plaster')
+    expect(memory[0].summary).toBe(moneyEnabled ? 'Ordered 2 bags of plaster' : 'plaster, 2 bags')
     const fact = await prisma.candidateFact.findFirst({ where: { jobId } })
     expect(fact?.status).toBe('CONFIRMED')
   })
@@ -207,6 +208,8 @@ describe('decision write path materialises the derived queue', () => {
       payload: { queueItemId: item.id, action: 'confirm' },
     })
     expect(post.statusCode).toBe(200)
-    expect(await prisma.queueItem.findUnique({ where: { id: staleId } })).toBeNull()
+    const stale = await prisma.queueItem.findUnique({ where: { id: staleId } })
+    if (moneyEnabled) expect(stale).toBeNull()
+    else expect(stale).toMatchObject({ status: 'draft', summary: 'stale row' })
   })
 })

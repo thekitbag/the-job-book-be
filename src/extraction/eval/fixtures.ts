@@ -21,6 +21,8 @@ export interface ExtractionFixture {
   jobContext: { title: string; jobType: string }
   tags: string[]
   expected: ExpectedFact[]
+  // Some genuinely vague notes may safely produce an unclear fact or no fact.
+  allowEmpty?: boolean
   notes: string
 }
 
@@ -212,15 +214,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: "Jewson said the plasterboard won't arrive until Friday now.",
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['supplier_delivery_note'],
-    expected: [
-      {
-        factType: 'supplier_delivery_note',
-        supplierName: 'Jewson',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: 'Delivery delay from named supplier. Must classify as supplier_delivery_note, not ordered_material.',
+    expected: [],
+    notes: "Delivery timing stays in the recording; the removed supplier_delivery_note type must not be emitted.",
   },
 
   {
@@ -231,14 +226,14 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     tags: ['supplier_delivery_note'],
     expected: [
       {
-        factType: 'supplier_delivery_note',
-        materialName: 'hardcore',
-        supplierName: 'Travis Perkins',
-        locationOrUse: 'front gate',
-        confidenceLabel: 'high',
+        factType: "ordered_material",
+        materialName: "hardcore",
+        supplierName: "Travis Perkins",
+        locationOrUse: "front gate",
+        confidenceLabel: "high",
       },
     ],
-    notes: 'Delivery location problem. Should stay as supplier_delivery_note, not used_material.',
+    notes: "The delivered material is retained as ordered_material; the location problem stays in the recording. No separate delivery-note fact.",
   },
 
   {
@@ -247,14 +242,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'The cladding delivery is missing the trims.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['supplier_delivery_note'],
-    expected: [
-      {
-        factType: 'supplier_delivery_note',
-        materialName: 'cladding trims',
-        confidenceLabel: 'high',
-      },
-    ],
-    notes: 'No supplier named — must not invent one. Delivery issue should be a supplier_delivery_note.',
+    expected: [],
+    notes: "A missing-trims delivery issue stays in the recording; no separate note fact or invented received material.",
   },
 
   // ── Customer Changes ──────────────────────────────────────────────────────
@@ -265,14 +254,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'Sarah wants the window moved six inches to the left.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['customer_change'],
-    expected: [
-      {
-        factType: 'customer_change',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: 'Direct customer instruction. Named person ("Sarah"). High confidence, no uncertainty.',
+    expected: [],
+    notes: "Customer instruction stays in the recording; no customer_change fact.",
   },
 
   {
@@ -281,14 +264,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'Customer asked for black guttering instead of white.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['customer_change'],
-    expected: [
-      {
-        factType: 'customer_change',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: 'Explicit change request. Should not be classified as ordered_material.',
+    expected: [],
+    notes: "Customer colour change stays in the recording; it is not a purchase or material usage.",
   },
 
   {
@@ -297,14 +274,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: "They might want an extra socket by the desk, not confirmed yet.",
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['customer_change', 'approximate'],
-    expected: [
-      {
-        factType: 'customer_change',
-        confidenceLabel: 'low',
-        uncertaintyFlags: ['unconfirmed'],
-      },
-    ],
-    notes: '"Might want" and "not confirmed yet" are explicit uncertainty markers. Low confidence and unconfirmed flag expected.',
+    expected: [],
+    notes: "The unconfirmed customer request stays in the recording; no customer_change fact.",
   },
 
   // ── Watch-Outs ────────────────────────────────────────────────────────────
@@ -315,14 +286,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'Watch out, the back left corner is still soft after the rain.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['watch_out'],
-    expected: [
-      {
-        factType: 'watch_out',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: 'Explicit "watch out" signal. Risk preserved in summary. High confidence.',
+    expected: [],
+    notes: "The warning is preserved verbatim in the recording, not extracted as a watch_out fact.",
   },
 
   {
@@ -331,14 +296,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'Remember the floor dips near the doorway.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['watch_out'],
-    expected: [
-      {
-        factType: 'watch_out',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: '"Remember" introduces a site risk note. Should classify as watch_out.',
+    expected: [],
+    notes: "The structural reminder stays in the recording, not a separate watch_out fact.",
   },
 
   {
@@ -347,14 +306,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: "Don't drill the right-hand stud, there's a cable behind it.",
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['watch_out'],
-    expected: [
-      {
-        factType: 'watch_out',
-        confidenceLabel: 'high',
-        uncertaintyFlags: [],
-      },
-    ],
-    notes: 'Safety instruction about hidden cable. Must be watch_out, not customer_change.',
+    expected: [],
+    notes: "The cable warning stays in the recording; no watch_out or customer_change fact.",
   },
 
   // ── Unclear / Noisy ───────────────────────────────────────────────────────
@@ -365,6 +318,7 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
     transcriptText: 'That thing from yesterday is still wrong, sort it before Friday.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['unclear'],
+    allowEmpty: true,
     expected: [
       {
         factType: 'unclear',
@@ -398,7 +352,7 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
 
   {
     id: 'mixed-001',
-    title: 'Ply used + order from Jewson + socket change — three separate facts',
+    title: 'Ply used + order from Jewson + socket change — two material facts; change remains in recording',
     transcriptText: 'Used four sheets of ply on the roof, ordered two more from Jewson, and Sarah wants the socket moved.',
     jobContext: { title: 'Garden room', jobType: 'garden_room' },
     tags: ['used_material', 'ordered_material', 'customer_change', 'mixed'],
@@ -416,11 +370,8 @@ export const GOLDEN_FIXTURES: ExtractionFixture[] = [
         quantity: '2',
         supplierName: 'Jewson',
       },
-      {
-        factType: 'customer_change',
-      },
     ],
-    notes: 'Three distinct fact types in one note. Splitting is critical. Customer change must not be merged with material facts.',
+    notes: 'Two material facts are retained separately. The socket-change instruction stays in the recording and must not leak into material facts.',
   },
 
   {

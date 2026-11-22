@@ -1,3 +1,4 @@
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // GET /api/jobs/:jobId/memory-view — trusted-section grouping and read shape:
 // eight sections, corrected values shown over originals, source context,
 // draft/stillToCheck separation, job summary metadata.
@@ -50,7 +51,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
       'customer_changes',
       'watch_outs',
       'labour',
-      'budget_costs',
+      ...(moneyEnabled ? ['budget_costs'] : []),
       'general_notes',
     ])
   })
@@ -85,7 +86,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
 
     const body = res.json<{ sections: Array<{ key: string; items: Array<{ summary: string; materialName: string }> }> }>()
     const used = body.sections.find((s) => s.key === 'used_materials')
-    expect(used?.items[0].summary).toBe('Corrected: used 10 sheets of OSB board')
+    expect(used?.items[0].summary).toBe(moneyEnabled ? 'Corrected: used 10 sheets of OSB board' : 'OSB board, 10 sheets, Jewson')
     expect(used?.items[0].materialName).toBe('OSB board')
   })
 
@@ -98,7 +99,7 @@ describe('GET /api/jobs/:jobId/memory-view — response shape', () => {
 
     const body = res.json<{ sections: Array<{ key: string; items: Array<{ budgetCategoryId: string | null }> }> }>()
     const ordered = body.sections.find((s) => s.key === 'ordered_materials')
-    expect(ordered?.items[0].budgetCategoryId).toBe('cat-timber')
+    expect(ordered?.items[0].budgetCategoryId).toBe(moneyEnabled ? 'cat-timber' : undefined)
   })
 
   it('returns normalized lowercase memoryType and job status', async () => {
