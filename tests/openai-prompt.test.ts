@@ -4,16 +4,16 @@ import { SYSTEM_PROMPT, buildUserPrompt } from '../src/extraction/openai.js'
 describe('OpenAI extraction prompt — labour', () => {
   it('documents the labour fact type and fields', () => {
     expect(SYSTEM_PROMPT).toContain('labour')
-    expect(SYSTEM_PROMPT).toContain('per_hour')
+    expect(SYSTEM_PROMPT).not.toContain('- costAmount:')
     expect(SYSTEM_PROMPT).toContain('labourHours')
     expect(SYSTEM_PROMPT).toContain('labourPerson')
     expect(SYSTEM_PROMPT).toContain('labourTask')
   })
 
   it('includes the labour examples from the spec', () => {
-    expect(SYSTEM_PROMPT).toContain('fitting the cladding')
-    expect(SYSTEM_PROMPT).toContain('£35 an hour')
-    expect(SYSTEM_PROMPT).toContain('Labour on the roof')
+    expect(SYSTEM_PROMPT).toContain('Me seven hours')
+    expect(SYSTEM_PROMPT).toContain('labourPerson to null')
+    expect(SYSTEM_PROMPT).toContain('no price in any field')
   })
 
   it('documents happenedAt and relative-day resolution', () => {
@@ -23,8 +23,8 @@ describe('OpenAI extraction prompt — labour', () => {
   })
 
   it('requires one labour fact per person — never a merged summary fact', () => {
-    expect(SYSTEM_PROMPT).toContain('Mike 4 hours, Kurt 6')
-    expect(SYSTEM_PROMPT.toLowerCase()).toMatch(/one labour fact per person|separate labour fact/)
+    expect(SYSTEM_PROMPT).toContain('Mike 6, Kurt 4')
+    expect(SYSTEM_PROMPT.toLowerCase()).toMatch(/one fact per person and day/)
   })
 })
 

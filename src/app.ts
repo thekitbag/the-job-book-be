@@ -1,3 +1,6 @@
+import { startNoteRecovery } from './services/recover-note-work.js'
+import captureRoutes from './routes/capture.js'
+import jobLogRoutes from './routes/job-log.js'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import cookie from '@fastify/cookie'
@@ -31,6 +34,7 @@ import labourPeopleRoutes from './routes/labour-people.js'
 import jobContactsRoutes from './routes/job-contacts.js'
 import workshopRoutes from './routes/workshop.js'
 import { MAX_AUDIO_BYTES } from './services/notes.js'
+import { installJobMemoryBoundary } from './plugins/job-memory.js'
 
 export interface AppOptions {
   storage?: AudioStorageProvider
@@ -38,6 +42,7 @@ export interface AppOptions {
   extraction?: ExtractionProvider
   email?: EmailProvider
   maxAudioBytes?: number
+  recoverOnStart?: boolean
 }
 
 export function buildApp(opts: AppOptions = {}) {
@@ -52,6 +57,15 @@ export function buildApp(opts: AppOptions = {}) {
   const extraction = opts.extraction ?? createExtractionProvider()
   const email = opts.email ?? createEmailProvider()
   const maxAudioBytes = opts.maxAudioBytes ?? MAX_AUDIO_BYTES
+
+  if (opts.recoverOnStart) {
+    let stopRecovery: (() => Promise<void>) | undefined
+    fastify.addHook('onListen', async () => {
+      stopRecovery = startNoteRecovery({ storage, transcription, extraction }, (err, noteId) =>
+        fastify.log.error({ err, noteId }, noteId ? 'note recovery failed' : 'note recovery scan failed'))
+    })
+    fastify.addHook('onClose', async () => { await stopRecovery?.() })
+  }
 
   fastify.register(cors, {
     credentials: true,
@@ -74,11 +88,15 @@ export function buildApp(opts: AppOptions = {}) {
     },
   })
 
+  installJobMemoryBoundary(fastify)
+
   // Auth routes bypass the auth plugin (login/logout handle their own flow)
   fastify.register(authRoutes, { email })
 
   fastify.register(authPlugin)
   fastify.register(jobsRoutes)
+  fastify.register(jobLogRoutes)
+  fastify.register(captureRoutes, { storage, extraction })
   fastify.register(notesRoutes, { storage, transcription, extraction })
   fastify.register(factsRoutes)
   fastify.register(reviewQueueRoutes)

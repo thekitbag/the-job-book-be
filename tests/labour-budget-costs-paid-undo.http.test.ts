@@ -285,7 +285,7 @@ describe('Mark paid / undo paid cycle', () => {
 describe('Review/extraction keeps a coherent labour fact together', () => {
   async function seedLabourNote() {
     const note = await prisma.rawNote.create({
-      data: { jobId, clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 100, serverStatus: 'EXTRACTED' },
+      data: { jobId, ownerUserId: ownerId, filedAt: new Date(), clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 100, serverStatus: 'EXTRACTED' },
     })
     const transcript = await prisma.transcript.create({
       data: { noteId: note.id, status: 'COMPLETED', text: 'Tom did 8 hours on electrics and it came to £280' },

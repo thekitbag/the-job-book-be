@@ -1,3 +1,4 @@
+import { moneyEnabled } from '../helpers/feature-profile.js'
 // POST /api/jobs/:jobId/review-queue-decisions — core decision behaviour:
 // request validation, confirm/correct/dismiss outcomes, group handling,
 // already-decided and confirm-not-allowed conflicts, ownership failure.
@@ -6,7 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { buildTestApp } from '../helpers/test-app.js'
 import {
   USER_ID, OTHER_USER_ID, JOB_ID, FACT_ID, FACT_ID_2, ITEM_ID, MEMORY_ID,
-  resetReviewQueueMocks, makeJob, makeQueueItem,
+  resetReviewQueueMocks, makeJob, makeQueueItem, makeFact,
 } from '../helpers/review-queue-test-builders.js'
 
 vi.mock('../../src/db/client.js', async () => {
@@ -27,6 +28,8 @@ afterAll(() => app.close())
 beforeEach(async () => {
   vi.clearAllMocks()
   prisma = await resetReviewQueueMocks()
+  // Decisions must be backed by a currently unresolved fact, not only a stored queue row.
+  vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([makeFact()])
 })
 
 function postDecision(payload: object) {
@@ -131,11 +134,11 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     )
     expect(prisma.memoryItem.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ memoryType: 'USED_MATERIAL', summary: 'Used OSB boards on the back wall' }),
+        data: expect.objectContaining({ memoryType: 'USED_MATERIAL', summary: moneyEnabled ? 'Used OSB boards on the back wall' : 'OSB, 6 boards, back wall' }),
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CONFIRMED' },
     })
   })
@@ -150,7 +153,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().sourceCandidateFactIds).toEqual([FACT_ID, FACT_ID_2])
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID, FACT_ID_2] } },
+      where: { id: { in: [FACT_ID, FACT_ID_2] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CONFIRMED' },
     })
   })
@@ -180,14 +183,14 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(prisma.memoryItem.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          summary: 'Used eight OSB boards on the back wall',
+          summary: moneyEnabled ? 'Used eight OSB boards on the back wall' : '8',
           quantity: '8',
           memoryType: 'USED_MATERIAL',
         }),
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CORRECTED' },
     })
   })
@@ -238,7 +241,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().action).toBe('correct')
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID, FACT_ID_2] } },
+      where: { id: { in: [FACT_ID, FACT_ID_2] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'CORRECTED' },
     })
   })
@@ -261,7 +264,7 @@ describe('POST /api/jobs/:jobId/review-queue-decisions', () => {
       }),
     )
     expect(prisma.candidateFact.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [FACT_ID] } },
+      where: { id: { in: [FACT_ID] }, jobId: JOB_ID, status: { in: ['DRAFT', 'UNCLEAR'] } },
       data: { status: 'REJECTED' },
     })
   })

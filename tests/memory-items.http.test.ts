@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
@@ -137,8 +138,8 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — validation', () 
       headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
       payload: { quantity: '10' },
     })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toMatchObject({ code: 'MISSING_FIELD' })
+    expect(res.statusCode).toBe(moneyEnabled ? 400 : 200)
+    if (moneyEnabled) expect(res.json()).toMatchObject({ code: 'MISSING_FIELD' })
   })
 
   it('returns 400 INVALID_FIELD when memoryType is unclear', async () => {
@@ -167,8 +168,9 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — validation', () 
       headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
       payload: { memoryType: 'ordered_material', costAmount: '5 each' },
     })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    expect(res.statusCode).toBe(moneyEnabled ? 400 : 200)
+    if (moneyEnabled) expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    else expect(res.json()).not.toHaveProperty('costAmount')
   })
 
   it('returns 400 INVALID_FIELD when totalCostAmount is not a decimal string', async () => {
@@ -177,8 +179,9 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — validation', () 
       headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
       payload: { memoryType: 'ordered_material', totalCostAmount: '£40' },
     })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    expect(res.statusCode).toBe(moneyEnabled ? 400 : 200)
+    if (moneyEnabled) expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    else expect(res.json()).not.toHaveProperty('costAmount')
   })
 
   it('returns 400 INVALID_FIELD when costQualifier is invalid', async () => {
@@ -187,8 +190,9 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — validation', () 
       headers: { 'content-type': 'application/json', 'x-pilot-user-id': USER_ID },
       payload: { memoryType: 'ordered_material', costQualifier: 'weekly' },
     })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    expect(res.statusCode).toBe(moneyEnabled ? 400 : 200)
+    if (moneyEnabled) expect(res.json()).toMatchObject({ code: 'INVALID_FIELD' })
+    else expect(res.json()).not.toHaveProperty('costAmount')
   })
 })
 
@@ -258,7 +262,7 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — happy path', () 
     expect(body.supplierName).toBe("Jews & Sons")
   })
 
-  it('persists cost fields when supplied', async () => {
+  it.runIf(moneyEnabled)('persists cost fields when supplied', async () => {
     const { prisma } = await import('../src/db/client.js')
 
     const res = await app.inject({
@@ -436,7 +440,7 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — uncertaintyResol
     })
 
     expect(prisma.memoryItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: ['material_uncertain'] }) }),
+      expect.objectContaining({ data: moneyEnabled ? expect.objectContaining({ unresolvedFlags: ['material_uncertain'] }) : expect.not.objectContaining({ unresolvedFlags: expect.anything() }) }),
     )
   })
 
@@ -453,7 +457,7 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — uncertaintyResol
     })
 
     expect(prisma.memoryItem.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ unresolvedFlags: ['approximate_quantity'] }) }),
+      expect.objectContaining({ data: moneyEnabled ? expect.objectContaining({ unresolvedFlags: ['approximate_quantity'] }) : expect.not.objectContaining({ unresolvedFlags: expect.anything() }) }),
     )
   })
 })
@@ -536,7 +540,7 @@ describe('POST /api/jobs/:jobId/memory-items/:memoryItemId/verify', () => {
 
 // ── PATCH cost recalculation ──────────────────────────────────────────────────
 
-describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculation', () => {
+describe.runIf(moneyEnabled)('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculation', () => {
   it('auto-derives totalCostAmount from quantity × costAmount when qualifier is each', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(
@@ -739,7 +743,7 @@ describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — cost recalculati
 
 // ── PATCH response labels ─────────────────────────────────────────────────────
 
-describe('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — response labels', () => {
+describe.runIf(moneyEnabled)('PATCH /api/jobs/:jobId/memory-items/:memoryItemId — response labels', () => {
   it('includes unitCostLabel and lineTotalLabel in response', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.update as any).mockResolvedValue(

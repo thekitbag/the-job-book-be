@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 // Returned materials: a Left over item can be returned in full or in part via
 // POST /memory-items/:id/return. A full return soft-removes the source leftover
 // (evidence preserved); a partial return reduces its quantity. The returned item
@@ -17,8 +18,9 @@ const LEFTOVER_ID = 'ret-leftover-1'
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Pilot' }) },
     job: { findUnique: vi.fn() },
+    labourPerson: { findMany: vi.fn().mockResolvedValue([]) },
     memoryItem: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     reviewDecision: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
     candidateFact: { findMany: vi.fn(), deleteMany: vi.fn() },
@@ -119,10 +121,10 @@ describe('POST return — partial return', () => {
     expect(createData.quantity).toBe('4')
     expect(createData.unit).toBe('posts') // defaulted from source
     expect(createData.supplierName).toBe('Jewson')
-    expect(createData.refundAmount).toBe('80')
-    expect(createData.refundCurrency).toBe('GBP')
+    expect(createData.refundAmount).toBe(moneyEnabled ? '80' : undefined)
+    expect(createData.refundCurrency).toBe(moneyEnabled ? 'GBP' : undefined)
     expect(createData.returnedFromMemoryItemId).toBe(LEFTOVER_ID)
-    expect(body.returnedItem.refundLabel).toBe('£80 refund')
+    expect(body.returnedItem.refundLabel).toBe(moneyEnabled ? '£80 refund' : undefined)
 
     // Source leftover reduced to remaining, NOT removed
     const updateCall = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
@@ -134,7 +136,7 @@ describe('POST return — partial return', () => {
 })
 
 describe('POST return — Money in refund event', () => {
-  it('creates one REFUND Money in event linked to the returned item for a trusted GBP refund', async () => {
+  it.runIf(moneyEnabled)('creates one REFUND Money in event linked to the returned item for a trusted GBP refund', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findFirst as any).mockResolvedValue(makeMemory({ quantity: '6' }))
     await post({ quantity: '4', refundAmount: '80', refundCurrency: 'GBP' })
@@ -228,13 +230,13 @@ describe('POST return — rejections (no mutation)', () => {
     expect(res.json().code).toBe('INVALID_FIELD')
   })
 
-  it('invalid refund amount → 400', async () => {
+  it.runIf(moneyEnabled)('invalid refund amount → 400', async () => {
     const res = await post({ quantity: '2', refundAmount: 'lots' })
     expect(res.statusCode).toBe(400)
     expect(res.json().code).toBe('INVALID_FIELD')
   })
 
-  it('non-GBP refund currency → 400', async () => {
+  it.runIf(moneyEnabled)('non-GBP refund currency → 400', async () => {
     const res = await post({ quantity: '2', refundAmount: '5', refundCurrency: 'USD' })
     expect(res.statusCode).toBe(400)
     expect(res.json().code).toBe('INVALID_FIELD')
@@ -286,12 +288,12 @@ describe('memory-view — Returned section and refund summary', () => {
     expect(section.items).toHaveLength(1)
     const item = section.items[0]
     expect(item.memoryType).toBe('returned_material')
-    expect(item.refundAmount).toBe('80')
-    expect(item.refundLabel).toBe('£80 refund')
+    expect(item.refundAmount).toBe(moneyEnabled ? '80' : undefined)
+    expect(item.refundLabel).toBe(moneyEnabled ? '£80 refund' : undefined)
     expect(item.returnedFromMemoryItemId).toBe(LEFTOVER_ID)
   })
 
-  it('a trusted refund reduces net totalKnownCost while gross stays and a refund row shows', async () => {
+  it.runIf(moneyEnabled)('a trusted refund reduces net totalKnownCost while gross stays and a refund row shows', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       makeMemory({ id: 'bought', memoryType: 'ORDERED_MATERIAL', materialName: 'Fence posts', totalCostAmount: '300', costCurrency: 'GBP' }),
@@ -307,7 +309,7 @@ describe('memory-view — Returned section and refund summary', () => {
     expect(cost.totalKnownCost.knownSpendAmount).toBe('220') // net: 300 − 80
   })
 
-  it('a returned item without a trusted refund does not reduce spend', async () => {
+  it.runIf(moneyEnabled)('a returned item without a trusted refund does not reduce spend', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       makeMemory({ id: 'bought', memoryType: 'ORDERED_MATERIAL', materialName: 'Fence posts', totalCostAmount: '300', costCurrency: 'GBP' }),
@@ -319,7 +321,7 @@ describe('memory-view — Returned section and refund summary', () => {
     expect(cost.totalKnownCost.knownSpendAmount).toBe('300')
   })
 
-  it('non-GBP or flagged refunds are excluded from net spend', async () => {
+  it.runIf(moneyEnabled)('non-GBP or flagged refunds are excluded from net spend', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       makeMemory({ id: 'bought', memoryType: 'ORDERED_MATERIAL', totalCostAmount: '300', costCurrency: 'GBP' }),
@@ -332,7 +334,7 @@ describe('memory-view — Returned section and refund summary', () => {
   })
 })
 
-describe('budget-summary — net known spend after refunds', () => {
+describe.runIf(moneyEnabled)('budget-summary — net known spend after refunds', () => {
   const budget = () => app.inject({ method: 'GET', url: `/api/jobs/${JOB_ID}/budget-summary`, headers: { 'x-pilot-user-id': USER_ID } })
 
   it('exposes net known spend and a refund adjustment; categories stay gross', async () => {

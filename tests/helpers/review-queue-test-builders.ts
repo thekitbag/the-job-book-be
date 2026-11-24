@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 // Shared builders + prisma mock for the review-queue HTTP test files
 // (tests/review-queue/*). Mocked-prisma style: each builder returns a plain
 // row shaped like the Prisma result the service reads, with explicit
@@ -13,7 +14,8 @@ export const TX_ID = 'queue-tx-1'
 export const TX_ID_2 = 'queue-tx-2'
 export const FACT_ID = 'queue-fact-1'
 export const FACT_ID_2 = 'queue-fact-2'
-export const ITEM_ID = 'queue-item-1'
+const queueDigest = createHash('sha256').update(`${JOB_ID}:${FACT_ID}`).digest('hex')
+export const ITEM_ID = `${queueDigest.slice(0, 8)}-${queueDigest.slice(8, 12)}-${queueDigest.slice(12, 16)}-${queueDigest.slice(16, 20)}-${queueDigest.slice(20, 32)}`
 export const DECISION_ID = 'queue-decision-1'
 export const MEMORY_ID = 'queue-memory-1'
 export const CAT_TIMBER = 'cat-timber'
@@ -60,7 +62,7 @@ export async function resetReviewQueueMocks() {
   vi.mocked(prisma.user.findUnique as any).mockResolvedValue(makeUser())
   vi.mocked(prisma.job.findUnique as any).mockResolvedValue(makeJob())
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
-  vi.mocked((prisma.candidateFact as any).updateMany).mockResolvedValue({ count: 1 })
+  vi.mocked((prisma.candidateFact as any).updateMany).mockImplementation(async ({ where }: any) => ({ count: where.id.in.length }))
   // Confirm/correct look up the source note's capture day to date a memory whose
   // type reads its date back as evidence and whose draft carries none.
   vi.mocked((prisma.candidateFact as any).findUnique).mockResolvedValue({

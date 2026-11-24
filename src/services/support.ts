@@ -119,7 +119,7 @@ export async function listSupportUsers(adminUserId: string) {
   const [users, jobs, noteActivity] = await Promise.all([
     prisma.user.findMany({ select: SAFE_USER_SELECT, orderBy: { email: 'asc' } }),
     prisma.job.findMany({ select: { id: true, ownerUserId: true, updatedAt: true } }),
-    prisma.rawNote.groupBy({ by: ['jobId'], _max: { uploadedAt: true } }),
+    prisma.rawNote.groupBy({ by: ['jobId'], where: { jobId: { not: null } }, _max: { uploadedAt: true } }),
   ])
 
   const latestNoteByJob = new Map(noteActivity.map((n) => [n.jobId, n._max.uploadedAt]))
@@ -179,7 +179,7 @@ export async function listSupportUserJobs(adminUserId: string, targetUserId: str
   for (const f of unresolvedFacts) reviewCounts.set(f.jobId, (reviewCounts.get(f.jobId) ?? 0) + 1)
 
   const photoCounts = new Map<string, number>()
-  for (const p of photoRows) photoCounts.set(p.jobId, (photoCounts.get(p.jobId) ?? 0) + 1)
+  for (const p of photoRows) if (p.jobId) photoCounts.set(p.jobId, (photoCounts.get(p.jobId) ?? 0) + 1)
 
   await writeAudit({ adminUserId, action: SUPPORT_AUDIT_ACTIONS.userJobsViewed, targetUserId })
 

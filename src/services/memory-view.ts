@@ -1,3 +1,5 @@
+import { buildHours } from './hours.js'
+import { MATERIAL_TYPES, memoryLabel, materialAmount } from '../lib/job-memory.js'
 import { prisma } from '../db/client.js'
 import { ErrorCode } from '../types/errors.js'
 import { deriveFreshQueueSections } from './review-queue.js'
@@ -670,7 +672,7 @@ export function buildMemoryViewItem(
   }
 }
 
-export async function getMemoryView(jobId: string, userId: string) {
+export async function getMemoryView(jobId: string, userId: string, moneyEnabled = true) {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: {
@@ -714,7 +716,7 @@ export async function getMemoryView(jobId: string, userId: string) {
           orderBy: [{ enteredWorkshopAt: 'desc' }, { id: 'asc' }],
         })
       : Promise.resolve([]),
-    deriveFreshQueueSections(jobId, new Date()),
+    deriveFreshQueueSections(jobId, new Date(), moneyEnabled),
   ])
   const paidEventByItem = new Map((paidEvents ?? []).flatMap((event) => event.sourceMemoryItemId ? [[event.sourceMemoryItemId, event] as const] : []))
   // At most one Workshop row exists per source leftover (a partial unique index
@@ -730,15 +732,17 @@ export async function getMemoryView(jobId: string, userId: string) {
   // Group memory items by section key derived from memoryType
   const bySection = new Map<string, typeof memoryItems>(SECTION_CONFIG.map((s) => [s.key, []]))
   for (const item of memoryItems) {
+    if (!moneyEnabled && (item.memoryType === 'BUDGET_COST' || (item.memoryType === 'LABOUR' && item.labourHours == null))) continue
     const key = MEMORY_TYPE_TO_SECTION[item.memoryType as string]
     bySection.get(key)?.push(item)
   }
 
-  const sections = SECTION_CONFIG.map(({ key, label }) => ({
+  const sections = SECTION_CONFIG.filter(s => moneyEnabled || s.key !== 'budget_costs').map(({ key, label }) => ({
     key,
-    label,
+    label: !moneyEnabled && key === 'labour' ? 'Hours' : label,
     items: (bySection.get(key) ?? []).map((m) =>
-      buildMemoryViewItem(m, paidEventByItem.get(m.id) ?? null, workshopBySourceItem.get(m.id) ?? null),
+      ({ ...buildMemoryViewItem(m, paidEventByItem.get(m.id) ?? null, workshopBySourceItem.get(m.id) ?? null),
+        ...(!moneyEnabled && MATERIAL_TYPES.has(m.memoryType) ? { memoryItemId: m.id, item: m.materialName, amount: materialAmount(m), supplier: m.supplierName, notes: m.locationOrUse, date: ukLocalDayString(m.happenedAt ?? m.sourceFact?.sourceNote.capturedAt ?? m.createdAt), summary: memoryLabel(m) } : {}) }),
     ),
   }))
 
@@ -785,6 +789,8 @@ export async function getMemoryView(jobId: string, userId: string) {
 
   const labourHoursSummary = buildLabourHoursSummary(labourItems, paidEventByItem)
 
+  const hours = !moneyEnabled ? buildHours(labourItems, (await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } })).name, new Map((await prisma.labourPerson.findMany({ where: { jobId }, select: { id: true, name: true } })).map(p => [p.id, p.name]))) : undefined
+
   return {
     job: {
       id: job.id,
@@ -798,8 +804,7 @@ export async function getMemoryView(jobId: string, userId: string) {
     generatedAt: new Date().toISOString(),
     sections,
     summarySections,
-    costSummary,
-    labourHoursSummary,
+    ...(moneyEnabled ? { costSummary, labourHoursSummary } : { hours }),
     stillToCheck: {
       count: stillToCheckItems.length,
       items: stillToCheckItems,

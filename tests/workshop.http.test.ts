@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 // Workshop core from real leftovers: availability memory over confirmed
 // leftovers and hand-added material.
 //
@@ -69,6 +70,20 @@ async function job(ownerUserId: string, title: string, status: string) {
 // Direct-add through the real HTTP write path, so Workshop always runs against
 // memory the app itself could have created.
 async function addItem(jobId: string, userId: string, body: Record<string, unknown>): Promise<string> {
+  if (!moneyEnabled) {
+    // Historical costed/split-quantity records are fixtures, not new money-off writes.
+    const decision = await prisma.reviewDecision.create({ data: { jobId, decidedBy: userId, action: 'ADD_MISSING' } })
+    const { markPaid, happenedAt, memoryType, ...fields } = body
+    const item = await prisma.memoryItem.create({ data: {
+      ...fields, jobId, reviewDecisionId: decision.id, memoryType: String(memoryType).toUpperCase(), isManual: true,
+      summary: String(body.materialName), happenedAt: happenedAt ? new Date(String(happenedAt)) : null,
+      totalCostAmount: body.costQualifier === 'total' ? body.costAmount : null,
+      costCurrency: body.costAmount ? 'GBP' : null,
+    } as never })
+    if (markPaid) await prisma.jobMoneyEvent.create({ data: { jobId, sourceMemoryItemId: item.id, kind: 'COST_PAID', direction: 'OUT', amount: String(body.costAmount), occurredAt: new Date('2026-08-01') } })
+    return item.id
+  }
+
   const res = await app.inject({
     method: 'POST',
     url: `/api/jobs/${jobId}/memory-items`,
@@ -158,6 +173,15 @@ function stripVolatile(value: unknown): unknown {
 const FINANCE_JOBS = () => [activeJobId, finishedJobId]
 
 async function financeSnapshot() {
+  if (!moneyEnabled) {
+    // Money routes are intentionally unavailable. Compare actual stored history,
+    // so Workshop preservation is still proved for every action with the gate unset.
+    return {
+      items: await prisma.memoryItem.findMany({ where: { jobId: { in: FINANCE_JOBS() } }, orderBy: { id: 'asc' } }),
+      events: await prisma.jobMoneyEvent.findMany({ where: { jobId: { in: FINANCE_JOBS() } }, orderBy: { id: 'asc' } }),
+      categories: await prisma.jobBudgetCategory.findMany({ where: { jobId: { in: FINANCE_JOBS() } }, orderBy: { id: 'asc' } }),
+    }
+  }
   const snapshot: Record<string, unknown> = {}
   for (const jobId of FINANCE_JOBS()) {
     snapshot[`budget:${jobId}`] = stripVolatile(await budgetSummary(jobId))
@@ -324,7 +348,8 @@ describe('POST /api/jobs/:jobId/memory-items/:memoryItemId/workshop', () => {
       .find((s: { key: string }) => s.key === 'ordered_materials')!
       .items.find((i: { id: string }) => i.id === boughtId)!
     expect(afterBought).toEqual(beforeBought)
-    expect(afterBought.isPaid).toBe(true)
+    if (moneyEnabled) expect(afterBought.isPaid).toBe(true)
+    else expect(afterBought).not.toHaveProperty('isPaid')
     expect(stripVolatile(afterView.costSummary)).toEqual(stripVolatile(beforeView.costSummary))
   })
 

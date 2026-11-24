@@ -86,6 +86,22 @@ describe('fixture loader', () => {
     }
   })
 
+  it('expects only current memory fact types, retaining removed-type inputs as negative cases', () => {
+    const allowed = new Set(['ordered_material', 'used_material', 'leftover_material', 'returned_material', 'labour', 'unclear'])
+    for (const fixture of GOLDEN_FIXTURES) {
+      for (const fact of fixture.expected) expect(allowed.has(fact.factType), fixture.id).toBe(true)
+      if (fixture.allowEmpty) expect(fixture.expected.every(f => f.factType === 'unclear'), fixture.id).toBe(true)
+    }
+  })
+
+  it('accepts the documented safe empty alternative only for the vague-note fixture', () => {
+    const vague = GOLDEN_FIXTURES.find(f => f.id === 'unclear-001')!
+    expect(compareFixture(vague, []).status).toBe('pass')
+    expect(compareFixture(vague, [makeFact({ factType: 'unclear', confidenceLabel: 'low' })]).status).toBe('pass')
+    expect(compareFixture(vague, [makeFact({ materialName: 'invented OSB' })]).status).toBe('fail')
+    expect(compareFixture(GOLDEN_FIXTURES.find(f => f.id === 'ordered-001')!, []).status).toBe('fail')
+  })
+
   it('fixture IDs are unique', () => {
     const ids = GOLDEN_FIXTURES.map((f) => f.id)
     expect(new Set(ids).size).toBe(ids.length)
@@ -105,7 +121,7 @@ describe('compareFixture — missing expected facts', () => {
 
   it('reports missing for each unmatched expected fact', () => {
     const fixture = GOLDEN_FIXTURES.find((f) => f.id === 'mixed-001')!
-    // Mixed fixture expects 3 facts; return nothing
+    // Mixed fixture expects two material facts; return nothing
     const result = compareFixture(fixture, [])
 
     const missing = result.factComparisons.filter((c) => c.status === 'missing')
@@ -144,7 +160,7 @@ describe('compareFixture — invented facts', () => {
 
 describe('compareFixture — fact-type mismatch', () => {
   it('detects type mismatch when actual factType differs from expected', () => {
-    const fixture = GOLDEN_FIXTURES.find((f) => f.id === 'supplier-001')!
+    const fixture = GOLDEN_FIXTURES.find((f) => f.id === 'used-001')!
     const actual = [makeFact({ factType: 'ordered_material', supplierName: 'Jewson' })]
     const result = compareFixture(fixture, actual)
 
@@ -153,13 +169,13 @@ describe('compareFixture — fact-type mismatch', () => {
   })
 
   it('includes expected and actual factType in the diff', () => {
-    const fixture = GOLDEN_FIXTURES.find((f) => f.id === 'watchout-001')!
+    const fixture = GOLDEN_FIXTURES.find((f) => f.id === 'leftover-001')!
     const actual = [makeFact({ factType: 'unclear' })]
     const result = compareFixture(fixture, actual)
 
     const mismatch = result.factComparisons.find((c) => c.status === 'type_mismatch')
     expect(mismatch).toBeDefined()
-    expect(mismatch!.fieldDiffs[0].expected).toBe('watch_out')
+    expect(mismatch!.fieldDiffs[0].expected).toBe('leftover_material')
     expect(mismatch!.fieldDiffs[0].actual).toBe('unclear')
   })
 })

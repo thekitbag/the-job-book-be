@@ -1,3 +1,4 @@
+import { moneyEnabled } from './helpers/feature-profile.js'
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
@@ -11,8 +12,9 @@ const CAT_ID = 'da-cat-1'
 
 vi.mock('../src/db/client.js', () => ({
   prisma: {
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn().mockResolvedValue({ name: 'Pilot' }) },
     job: { findUnique: vi.fn() },
+    labourPerson: { findMany: vi.fn().mockResolvedValue([]) },
     jobBudgetCategory: { findFirst: vi.fn(), findMany: vi.fn() },
     reviewDecision: { create: vi.fn() },
     memoryItem: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -53,7 +55,7 @@ beforeEach(async () => {
   vi.mocked(prisma.reviewDecision.create as any).mockResolvedValue({ id: 'rd-1' })
   // create() echoes the data so the normalized response reflects what was written
   vi.mocked(prisma.memoryItem.create as any).mockImplementation(async ({ data }: any) => ({
-    id: 'mem-new', createdAt: new Date(), updatedAt: new Date(), ...data,
+    id: 'mem-new', createdAt: new Date(), updatedAt: new Date(), sourceCandidateFactId: null, ...data,
   }))
   vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([])
   vi.mocked(prisma.candidateFact.findMany as any).mockResolvedValue([])
@@ -82,23 +84,23 @@ describe('POST /api/jobs/:jobId/memory-items — direct add', () => {
     expect(body.source).toBeNull()
     expect(body.sourceCandidateFactId).toBeNull()
     // derived summary + stated total counted + GBP defaulted
-    expect(body.summary).toBe('Bought 2 loads timber')
-    expect(body.totalCostAmount).toBe('900')
-    expect(body.costCurrency).toBe('GBP')
+    expect(body.summary).toBe(moneyEnabled ? 'Bought 2 loads timber' : 'timber, 2')
+    expect(body.totalCostAmount).toBe(moneyEnabled ? '900' : undefined)
+    expect(body.costCurrency).toBe(moneyEnabled ? 'GBP' : undefined)
   })
 
   it('creates an ADD_MISSING review decision with empty source facts', async () => {
     const { prisma } = await import('../src/db/client.js')
-    await post({ memoryType: 'ordered_material', materialName: 'timber', costAmount: '50', costQualifier: 'total' })
+    await post({ memoryType: 'ordered_material', materialName: 'timber', quantity: '1', costAmount: '50', costQualifier: 'total' })
     expect(prisma.reviewDecision.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
-      action: 'ADD_MISSING', candidateFactId: null, sourceCandidateFactIds: [], sectionKey: 'ordered_materials',
+      action: 'ADD_MISSING', sourceCandidateFactIds: [], ...(moneyEnabled ? { candidateFactId: null, sectionKey: 'ordered_materials' } : {}),
     }) }))
   })
 
   it('manual spend without cost is remembered but has no total', async () => {
-    const res = await post({ memoryType: 'ordered_material', materialName: 'sand' })
+    const res = await post({ memoryType: 'ordered_material', materialName: 'sand', quantity: '1' })
     expect(res.statusCode).toBe(201)
-    expect(res.json<Record<string, any>>().totalCostAmount).toBeNull()
+    expect(res.json<Record<string, any>>().totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 
   it('creates manual labour with happenedAt, person, hours and task', async () => {
@@ -109,10 +111,10 @@ describe('POST /api/jobs/:jobId/memory-items — direct add', () => {
     expect(body.labourHours).toBe('8')
     expect(body.labourPerson).toBe('Tom')
     expect(body.happenedAt).toBeTruthy()
-    expect(body.summary).toBe('Tom — 8 hours · electrics')
+    expect(body.summary).toBe(moneyEnabled ? 'Tom — 8 hours · electrics' : 'Tom, 8 hours, electrics, 2026-07-01')
   })
 
-  it('derives a per_hour labour total', async () => {
+  it.runIf(moneyEnabled)('derives a per_hour labour total', async () => {
     await post({ memoryType: 'labour', labourHours: '8', labourPerson: 'Tom', costAmount: '35', costQualifier: 'per_hour' })
     expect((await lastCreateData()).totalCostAmount).toBe('280')
   })
@@ -122,8 +124,8 @@ describe('POST /api/jobs/:jobId/memory-items — direct add', () => {
     expect(res.statusCode).toBe(201)
     const body = res.json<Record<string, any>>()
     expect(body.memoryType).toBe('used_material')
-    expect(body.summary).toBe('Used 20 pcs screws')
-    expect(body.totalCostAmount).toBeNull()
+    expect(body.summary).toBe(moneyEnabled ? 'Used 20 pcs screws' : 'screws, 20')
+    expect(body.totalCostAmount).toBe(moneyEnabled ? null : undefined)
   })
 
   it('creates a plain general_note', async () => {
@@ -134,8 +136,8 @@ describe('POST /api/jobs/:jobId/memory-items — direct add', () => {
 
   it('creates a typed note (watch_out)', async () => {
     const res = await post({ memoryType: 'watch_out', summary: 'Watch the soft ground by the fence' })
-    expect(res.statusCode).toBe(201)
-    expect(res.json<Record<string, any>>().memoryType).toBe('watch_out')
+    expect(res.statusCode).toBe(moneyEnabled ? 201 : 400)
+    expect(res.json<Record<string, any>>().memoryType).toBe(moneyEnabled ? 'watch_out' : undefined)
   })
 
   // ── Validation ──────────────────────────────────────────────────────────────
@@ -146,28 +148,28 @@ describe('POST /api/jobs/:jobId/memory-items — direct add', () => {
   it('rejects unclear memoryType', async () => {
     expect((await post({ memoryType: 'unclear', summary: 'x' })).statusCode).toBe(400)
   })
-  it('rejects an invalid decimal', async () => {
-    expect((await post({ memoryType: 'ordered_material', materialName: 'x', costAmount: 'lots' })).statusCode).toBe(400)
+  it('validates cost decimals only on restoration; ignores them with money off', async () => {
+    expect((await post({ memoryType: 'ordered_material', materialName: 'x', quantity: '1', costAmount: 'lots' })).statusCode).toBe(moneyEnabled ? 400 : 201)
   })
   it('rejects an invalid happenedAt', async () => {
-    expect((await post({ memoryType: 'labour', labourHours: '2', happenedAt: 'not-a-date' })).statusCode).toBe(400)
+    expect((await post({ memoryType: 'labour', labourPerson: 'Tom', labourHours: '2', happenedAt: 'not-a-date' })).statusCode).toBe(400)
   })
   it('rejects a blank note with no derivable summary', async () => {
     expect((await post({ memoryType: 'general_note' })).statusCode).toBe(400)
   })
-  it('rejects a category on a non-eligible memory type', async () => {
+  it.runIf(moneyEnabled)('rejects a category on a non-eligible memory type', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(makeCategory())
     expect((await post({ memoryType: 'used_material', materialName: 'x', budgetCategoryId: CAT_ID })).statusCode).toBe(400)
   })
-  it('allows a category on ordered_material', async () => {
+  it.runIf(moneyEnabled)('allows a category on ordered_material', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(makeCategory())
-    const res = await post({ memoryType: 'ordered_material', materialName: 'timber', costAmount: '50', costQualifier: 'total', budgetCategoryId: CAT_ID })
+    const res = await post({ memoryType: 'ordered_material', materialName: 'timber', quantity: '1', costAmount: '50', costQualifier: 'total', budgetCategoryId: CAT_ID })
     expect(res.statusCode).toBe(201)
     expect(res.json<Record<string, any>>().budgetCategoryId).toBe(CAT_ID)
   })
-  it('rejects an archived category (400) and another-job category (404)', async () => {
+  it.runIf(moneyEnabled)('rejects an archived category (400) and another-job category (404)', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.jobBudgetCategory.findFirst as any).mockResolvedValue(makeCategory({ isArchived: true }))
     expect((await post({ memoryType: 'labour', labourHours: '2', budgetCategoryId: CAT_ID })).statusCode).toBe(400)
@@ -209,7 +211,7 @@ describe('direct-add items in memory-view and budget-summary', () => {
     expect(section.items[0].source).toBeNull()
   })
 
-  it('includes manual spend with a safe total in budget-summary', async () => {
+  it.runIf(moneyEnabled)('includes manual spend with a safe total in budget-summary', async () => {
     const { prisma } = await import('../src/db/client.js')
     vi.mocked(prisma.memoryItem.findMany as any).mockResolvedValue([
       manual({ id: 'paid', memoryType: 'ORDERED_MATERIAL', materialName: 'timber', totalCostAmount: '900', costCurrency: 'GBP' }),
@@ -238,7 +240,7 @@ describe('direct-add items in memory-view and budget-summary', () => {
   })
 })
 
-describe('auto-total unit cost — direct add and patch derivation', () => {
+describe.runIf(moneyEnabled)('auto-total unit cost — direct add and patch derivation', () => {
   function existing(overrides: any) {
     return {
       id: 'm1', jobId: JOB_ID, reviewDecisionId: 'rd-1', sourceCandidateFactId: null, isManual: true,
@@ -347,9 +349,9 @@ describe('labour happenedAt — create/patch day semantics', () => {
   it('clears happenedAt when the patch sends null', async () => {
     const { prisma } = await import('../src/db/client.js')
     const res = await patch({ memoryType: 'labour', summary: 'Tom — 8 hours', happenedAt: null })
-    expect(res.statusCode).toBe(200)
-    const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]
-    expect(call.data.happenedAt).toBeNull()
+    expect(res.statusCode).toBe(moneyEnabled ? 200 : 400)
+    if (moneyEnabled) expect(vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0].data.happenedAt).toBeNull()
+    else expect(prisma.memoryItem.update).not.toHaveBeenCalled()
   })
 
   it('rejects an invalid happenedAt on patch with 400', async () => {
@@ -362,7 +364,7 @@ describe('labour happenedAt — create/patch day semantics', () => {
     const { prisma } = await import('../src/db/client.js')
     const res = await patch({
       memoryType: 'labour', summary: 'Kurt — 6 hours · roof',
-      happenedAt: '2026-07-03T11:00:00.000Z', labourPerson: 'Kurt', labourHours: '6', labourTask: 'roof',
+      happenedAt: '2026-07-03', labourPerson: 'Kurt', labourHours: '6', labourTask: 'roof',
     })
     expect(res.statusCode).toBe(200)
     const call = vi.mocked(prisma.memoryItem.update as any).mock.calls[0][0]

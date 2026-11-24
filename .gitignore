@@ -5,3 +5,6 @@ dist/
 audio-store/
 *.local
 reports/extraction-eval/*.md
+reports/extraction-eval/*.json
+
+reports/test/

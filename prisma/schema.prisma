@@ -19,6 +19,8 @@ model User {
   jobs                    Job[]
   reviewDecisions         ReviewDecision[]
   passwordResetTokens     PasswordResetToken[]
+  ownedNotes              RawNote[]
+  itemMoves               ItemMove[]
   uploadedPhotos          JobPhoto[]
   supportAuditEvents      SupportAuditEvent[]
   createdJobContacts      JobContact[]
@@ -210,9 +212,37 @@ enum JobStatus {
   ARCHIVED
 }
 
+enum CaptureContext {
+  HOME
+  JOB
+}
+
+enum ItemMoveKind {
+  NOTE
+  PHOTO
+}
+
+model ItemMove {
+  id          String @id @default(uuid())
+  ownerUserId String
+  kind        ItemMoveKind
+  noteId      String?
+  photoId     String?
+  fromJobId   String
+  toJobId     String
+  movedAt     DateTime @default(now())
+  owner       User @relation(fields: [ownerUserId], references: [id])
+
+  @@index([ownerUserId, movedAt])
+  @@map("item_moves")
+}
+
 model RawNote {
   id           String     @id @default(uuid())
-  jobId        String
+  jobId        String?
+  ownerUserId  String
+  captureContext CaptureContext @default(JOB)
+  filedAt      DateTime?
   clientNoteId String
   capturedAt   DateTime
   uploadedAt   DateTime   @default(now())
@@ -223,13 +253,16 @@ model RawNote {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  job            Job             @relation(fields: [jobId], references: [id])
+  job            Job?            @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  owner          User            @relation(fields: [ownerUserId], references: [id])
   audioObject    AudioObject?
   transcripts    Transcript[]
   candidateFacts CandidateFact[]
   linkedPhotos   JobPhoto[]
 
-  @@unique([jobId, clientNoteId])
+  @@unique([ownerUserId, clientNoteId])
+  @@index([ownerUserId, jobId, capturedAt])
+  @@index([jobId])
   @@map("raw_notes")
 }
 
@@ -384,6 +417,7 @@ enum ReviewDecisionAction {
   CONFIRM_SECTION
   ADD_MISSING
   QUEUE_CONFIRM
+  NOTE_LOOKS_RIGHT
   QUEUE_CORRECT
   QUEUE_DISMISS
 }
@@ -501,7 +535,10 @@ enum JobEvidenceFileKind {
 // `job_photos` for compatibility.
 model JobPhoto {
   id                 String              @id @default(uuid())
-  jobId              String
+  jobId              String?
+  captureContext     CaptureContext @default(JOB)
+  filedAt            DateTime?
+  clientPhotoId      String?
   uploadedByUserId   String
   kind               JobEvidenceKind     @default(PHOTO)
   fileKind           JobEvidenceFileKind @default(IMAGE)
@@ -520,11 +557,13 @@ model JobPhoto {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
-  job              Job         @relation(fields: [jobId], references: [id])
+  job              Job?        @relation(fields: [jobId], references: [id], onDelete: Restrict)
   uploadedBy       User        @relation(fields: [uploadedByUserId], references: [id])
   linkedNote       RawNote?    @relation(fields: [linkedNoteId], references: [id])
   linkedMemoryItem MemoryItem? @relation(fields: [linkedMemoryItemId], references: [id])
 
+  @@unique([uploadedByUserId, clientPhotoId])
+  @@index([uploadedByUserId, jobId, uploadedAt])
   @@index([jobId, uploadedAt])
   @@index([jobId, linkedNoteId])
   @@index([jobId, linkedMemoryItemId])

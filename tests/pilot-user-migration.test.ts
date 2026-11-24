@@ -46,7 +46,7 @@ beforeEach(async () => {
   })
   jobId = job.id
   const note = await prisma.rawNote.create({
-    data: { jobId, clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 10 },
+    data: { jobId, ownerUserId: pilotUserId, filedAt: new Date(), clientNoteId: randomUUID(), capturedAt: new Date(), mimeType: 'audio/webm', sizeBytes: 10 },
   })
   const tx = await prisma.transcript.create({ data: { noteId: note.id, status: 'COMPLETED', text: 'x' } })
   const fact = await prisma.candidateFact.create({

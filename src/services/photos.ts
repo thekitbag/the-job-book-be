@@ -78,7 +78,7 @@ const LINKED_INCLUDE = {
 // are only reachable through the authenticated file route.
 function normalizeJobPhoto(photo: {
   id: string
-  jobId: string
+  jobId: string | null
   descriptor: string | null
   mimeType: string
   sizeBytes: number
@@ -148,6 +148,7 @@ export async function createJobPhoto(input: CreateJobPhotoInput, storage: AudioS
       data: {
         id: photoId,
         jobId: input.jobId,
+        filedAt: new Date(),
         uploadedByUserId: input.userId,
         // Classification follows the upload flow, not the file format: this
         // route is "Add photo", so the row is always a PHOTO.

@@ -13,6 +13,7 @@ vi.mock('../src/db/client.js', () => {
     clientNoteId: 'client-note-1',
     serverStatus: 'UPLOADED',
     audioObject: {},
+    jobId: JOB_ID,
   }
 
   const calls = {
@@ -21,17 +22,17 @@ vi.mock('../src/db/client.js', () => {
     create: vi.fn(),
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
       const tx = {
-        rawNote: { create: vi.fn() },
+        rawNote: { create: vi.fn(({ data }) => data) },
         audioObject: { create: vi.fn() },
       }
-      await fn(tx)
+      return fn(tx)
     }),
   }
 
   // Default: job exists and belongs to user; no existing note
   calls.findUnique.mockImplementation(({ where }: { where: Record<string, unknown> }) => {
     if (where.id === JOB_ID) return { id: JOB_ID, ownerUserId: USER_ID }
-    if (where.jobId_clientNoteId) return null  // no duplicate by default
+    if (where.ownerUserId_clientNoteId) return null  // no duplicate by default
     return null
   })
 
@@ -109,7 +110,7 @@ describe('uploadNote', () => {
   it('rejects unsupported MIME type with AUDIO_UNSUPPORTED_TYPE', async () => {
     await expect(
       uploadNote(
-        { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/mp4', audioBuffer: VALID_WEBM },
+        { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/mp4', audioBuffer: VALID_WEBM },
         storage,
       ),
     ).rejects.toMatchObject({ code: ErrorCode.AUDIO_UNSUPPORTED_TYPE })
@@ -119,7 +120,7 @@ describe('uploadNote', () => {
     const huge = Buffer.alloc(26 * 1024 * 1024)
     await expect(
       uploadNote(
-        { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: huge },
+        { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: huge },
         storage,
       ),
     ).rejects.toMatchObject({ code: ErrorCode.AUDIO_TOO_LARGE })
@@ -144,11 +145,11 @@ describe('uploadNote', () => {
     vi.mocked(prisma.rawNote.findUnique).mockResolvedValueOnce(null)
 
     const result = await uploadNote(
-      { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c-new', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
+      { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c-new', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
       storage,
     )
 
-    expect(result.status).toBe('UPLOADED')
+    expect(result.note.serverStatus).toBe('UPLOADED')
     expect(result.isDuplicate).toBe(false)
     expect(storage.stored.size).toBe(1)
   })
@@ -184,12 +185,12 @@ describe('uploadNote', () => {
     } as any)
 
     const result = await uploadNote(
-      { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c-dup', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
+      { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c-dup', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
       storage,
     )
 
     expect(result.isDuplicate).toBe(true)
-    expect(result.noteId).toBe('existing-note-id')
+    expect(result.note.id).toBe('existing-note-id')
     expect(storage.stored.size).toBe(0)
   })
 
@@ -210,7 +211,7 @@ describe('uploadNote', () => {
 
     await expect(
       uploadNote(
-        { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
+        { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c1', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
         storage,
       ),
     ).rejects.toMatchObject({ code: ErrorCode.FORBIDDEN })
@@ -253,12 +254,12 @@ describe('uploadNote', () => {
     vi.mocked(prisma.$transaction).mockRejectedValueOnce({ code: 'P2002' })
 
     const result = await uploadNote(
-      { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c-race', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
+      { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c-race', capturedAt: new Date(), mimeType: 'audio/webm', audioBuffer: VALID_WEBM },
       storage,
     )
 
     expect(result.isDuplicate).toBe(true)
-    expect(result.noteId).toBe('concurrent-winner')
+    expect(result.note.id).toBe('concurrent-winner')
     // The orphaned audio file written before the DB failure should have been deleted
     expect(storage.stored.size).toBe(0)
   })
@@ -282,11 +283,11 @@ describe('uploadNote', () => {
         },
         audioObject: { create: vi.fn() },
       }
-      await fn(tx)
+      return fn(tx)
     })
 
     await uploadNote(
-      { jobId: JOB_ID, userId: USER_ID, clientNoteId: 'c-opus', capturedAt: new Date(), mimeType: 'audio/webm;codecs=opus', audioBuffer: VALID_WEBM },
+      { jobId: JOB_ID, legacy: true, userId: USER_ID, clientNoteId: 'c-opus', capturedAt: new Date(), mimeType: 'audio/webm;codecs=opus', audioBuffer: VALID_WEBM },
       storage,
     )
 
